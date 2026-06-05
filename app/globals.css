@@ -1,0 +1,26 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0D1117;
+  --bg2: #161B22;
+  --bg3: #21262D;
+  --border: #30363D;
+  --accent: #58A6FF;
+  --accent2: #3FB950;
+  --warn: #F78166;
+  --text: #E6EDF3;
+  --text2: #8B949E;
+  --text3: #484F58;
+  --radius: 8px;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Noto Sans KR', sans-serif;
+  margin: 0;
+}
