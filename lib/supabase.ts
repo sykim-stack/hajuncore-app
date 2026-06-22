@@ -15,11 +15,10 @@ export async function supabaseGet(path: string, schema: string = 'public') {
     },
     cache: 'no-store',
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Supabase GET 실패 (${res.status}): ${text}`);
-  }
-  return res.json();
+  const text = await res.text();
+  console.log('[supabaseGet]', path.substring(0, 50), res.status, text.substring(0, 200));
+  if (!res.ok) return [];
+  try { return JSON.parse(text); } catch(e) { return []; }
 }
 
 export async function supabasePatch(table: string, id: string, body: Record<string, unknown>, schema: string = 'public') {
