@@ -1,4 +1,3 @@
-// app/api/hajun/route.ts
 import { supabaseGet, supabasePatch } from '@/lib/supabase';
 
 const HOUSE_ID = '9b06b568-a0c9-4b88-8768-e5acbdaf156a';
@@ -23,7 +22,6 @@ async function analyzeWithGemini(prompt: string): Promise<string> {
       }
     );
     const data = await res.json();
-    console.log('[Gemini]', JSON.stringify(data).substring(0, 300));
     if (data.error) return '(Gemini 오류: ' + data.error.message + ')';
     return data.candidates?.[0]?.content?.parts?.[0]?.text || '(분석 실패)';
   } catch(e: unknown) {
@@ -37,96 +35,114 @@ async function getMindWorld() {
   const threeDaysLater = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  // 1. 씨앗방 전체 조회 (house_id 기준)
+  // 1. 씨앗방 전체 조회
   const allRooms = await supabaseGet('corenull_rooms?house_id=eq.' + HOUSE_ID);
   const seedRooms = allRooms.filter((r: any) => r.seed_mode === true);
   console.log('[MindWorld] seedRooms:', seedRooms.length);
 
-  // 2. 이 집의 room_id 목록 추출
   const allRoomIds = allRooms.map((r: any) => r.id);
   if (allRoomIds.length === 0) {
     return {
       message: '하준님, 아직 방이 없어요. 첫 씨앗을 심어볼까요?',
       seeds: { total: 0, bloomingSoon: [], bloomed: [], neglected: [], active: [] },
+      fruits: { unharvested: [], harvested: [] },
       recentActivity: [],
       today
     };
   }
 
-  // 3. room_id in (...)으로 messages 조회 — owner_key 대신 room 경로
   const roomIdList = allRoomIds.join(',');
+
+  // 2. post 조회 (씨앗 활동 분석용)
   const recentPosts = await supabaseGet(
     'messages?room_id=in.(' + roomIdList + ')' +
     '&type=eq.post' +
     '&order=created_at.desc&limit=50'
   );
-  console.log('[MindWorld] recentPosts:', recentPosts.length);
 
-  // 4. 꽃 피기 임박 (3일 이내)
+  // 3. 미수확 열매 — 알려주기만, 결정 대행 금지
+  const unharvestedFruits = await supabaseGet(
+    'messages?room_id=in.(' + roomIdList + ')' +
+    '&type=eq.fruit' +
+    '&harvested_at=is.null' +
+    '&order=created_at.desc'
+  );
+
+  // 4. 수확된 열매 (최근 5개)
+  const harvestedFruits = await supabaseGet(
+    'messages?room_id=in.(' + roomIdList + ')' +
+    '&type=eq.fruit' +
+    '&harvested_at=not.is.null' +
+    '&order=harvested_at.desc&limit=5'
+  );
+
+  console.log('[MindWorld] unharvestedFruits:', unharvestedFruits.length);
+  console.log('[MindWorld] harvestedFruits:', harvestedFruits.length);
+
+  // 5. 꽃 피기 임박 / 이미 꽃 핀 씨앗
   const bloomingSoon = seedRooms.filter((r: any) =>
     r.bloom_date && r.bloom_date >= today && r.bloom_date <= threeDaysLater
   );
-
-  // 5. 이미 꽃 핀 씨앗 (bloom_date 지남)
   const bloomed = seedRooms.filter((r: any) =>
     r.bloom_date && r.bloom_date < today
   );
 
-  // 6. 씨앗방별 마지막 post 날짜 계산
+  // 6. 씨앗방별 마지막 post 날짜
   const lastPostByRoom: Record<string, string> = {};
   for (const m of recentPosts) {
-    if (!lastPostByRoom[m.room_id]) {
-      lastPostByRoom[m.room_id] = m.created_at;
-    }
+    if (!lastPostByRoom[m.room_id]) lastPostByRoom[m.room_id] = m.created_at;
   }
 
-  // 7. 방치된 씨앗: 7일간 post 없는 씨앗방
+  // 7. 방치된 씨앗 / 활동한 씨앗
   const neglectedSeeds = seedRooms.filter((r: any) => {
     const last = lastPostByRoom[r.id];
     if (!last) return true;
     return last < sevenDaysAgo;
   });
-
-  // 8. 이번 주 활동한 씨앗방
   const activeSeeds = seedRooms.filter((r: any) => {
     const last = lastPostByRoom[r.id];
     return last && last >= sevenDaysAgo;
   });
 
-  // 9. 최근 활동 요약 (UI 표시용)
+  // 8. 최근 활동 요약
   const recentActivity = recentPosts.slice(0, 5).map((m: any) => ({
     room_id: m.room_id,
     content: m.content?.substring(0, 50),
     created_at: m.created_at
   }));
 
-  // 10. Gemini 프롬프트
-  const seedList = JSON.stringify(
-    seedRooms.map((r: any) => ({
-      name: r.room_name,
-      bloom_date: r.bloom_date,
-      last_post: lastPostByRoom[r.id] || null
-    }))
-  );
-  const bloomList = JSON.stringify(bloomingSoon.map((r: any) => ({ name: r.room_name, bloom_date: r.bloom_date })));
-  const bloomedList = JSON.stringify(bloomed.map((r: any) => ({ name: r.room_name, bloom_date: r.bloom_date })));
-  const neglectList = JSON.stringify(neglectedSeeds.map((r: any) => ({ name: r.room_name, last_post: lastPostByRoom[r.id] || '기록 없음' })));
-  const activeList = JSON.stringify(activeSeeds.map((r: any) => r.room_name));
+  // 9. room_id → room_name 매핑 (Fruit 표시용)
+  const roomNameMap: Record<string, string> = {};
+  for (const r of allRooms) roomNameMap[r.id] = r.room_name;
 
+  const unharvestedList = unharvestedFruits.map((m: any) => ({
+    content: m.content?.substring(0, 50),
+    room_name: roomNameMap[m.room_id] || '알 수 없는 방',
+    created_at: m.created_at
+  }));
+
+  const harvestedList = harvestedFruits.map((m: any) => ({
+    content: m.content?.substring(0, 50),
+    room_name: roomNameMap[m.room_id] || '알 수 없는 방',
+    harvested_at: m.harvested_at
+  }));
+
+  // 10. Gemini 프롬프트 — 우선순위: 꽃 임박 > 미수확 열매 > 꽃 핌 > 방치 > 응원
   const geminiPrompt = `당신은 BRAINPOOL의 HajunAI입니다. 사용자의 삶의 흐름을 따뜻하게 읽어주는 AI입니다.
-HajunAI는 알려주기만 합니다. 결정을 대신하거나 행동을 강요하지 않습니다.
+HajunAI는 알려주기만 합니다. Fruit 생성이나 Harvest는 절대 대신 결정하지 않습니다.
 아래 데이터를 보고 사용자에게 건네는 한마디를 작성해주세요.
 형식: "하준님, [따뜻하고 구체적인 한마디]"
 100자 이내, 마크다운 금지.
 
 오늘 날짜: ${today}
-씨앗방 목록 (name, bloom_date, last_post): ${seedList}
-꽃 피기 임박 (3일 이내): ${bloomList}
-이미 꽃 핀 씨앗 (bloom_date 지남): ${bloomedList}
-이번 주 기록 없는 씨앗: ${neglectList}
-이번 주 활동한 씨앗: ${activeList}
+씨앗방 목록: ${JSON.stringify(seedRooms.map((r: any) => ({ name: r.room_name, bloom_date: r.bloom_date, last_post: lastPostByRoom[r.id] || null })))}
+꽃 피기 임박 (3일 이내): ${JSON.stringify(bloomingSoon.map((r: any) => ({ name: r.room_name, bloom_date: r.bloom_date })))}
+이미 꽃 핀 씨앗: ${JSON.stringify(bloomed.map((r: any) => ({ name: r.room_name, bloom_date: r.bloom_date })))}
+이번 주 기록 없는 씨앗: ${JSON.stringify(neglectedSeeds.map((r: any) => ({ name: r.room_name })))}
+미수확 열매: ${JSON.stringify(unharvestedList)}
+수확된 열매: ${JSON.stringify(harvestedList)}
 
-우선순위: 꽃 피기 임박 > 이미 꽃 핀 씨앗 > 이번 주 활동 없음 > 일반 응원`;
+우선순위: 꽃 피기 임박 > 미수확 열매 존재 > 이미 꽃 핀 씨앗 > 이번 주 활동 없음 > 일반 응원`;
 
   const message = await analyzeWithGemini(geminiPrompt);
 
@@ -138,6 +154,10 @@ HajunAI는 알려주기만 합니다. 결정을 대신하거나 행동을 강요
       bloomed: bloomed.map((r: any) => ({ name: r.room_name, bloom_date: r.bloom_date })),
       neglected: neglectedSeeds.map((r: any) => ({ name: r.room_name, last_post: lastPostByRoom[r.id] || null })),
       active: activeSeeds.map((r: any) => r.room_name)
+    },
+    fruits: {
+      unharvested: unharvestedList,
+      harvested: harvestedList
     },
     recentActivity,
     today

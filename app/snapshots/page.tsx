@@ -16,9 +16,29 @@ const S: Record<string, React.CSSProperties> = {
   page: { display: 'flex', minHeight: '100vh', background: 'var(--bg)' },
   main: { flex: 1, padding: '32px 36px', overflowY: 'auto' },
   title: { fontSize: 22, fontWeight: 700, marginBottom: 4 },
-  sub: { fontSize: 12, color: 'var(--text2)', marginBottom: 28, fontFamily: 'JetBrains Mono, monospace' },
+  sub: { fontSize: 12, color: 'var(--text2)', marginBottom: 16, fontFamily: 'JetBrains Mono, monospace' },
   card: { background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 16, marginBottom: 10, cursor: 'pointer', transition: 'border-color 0.15s' },
   badge: { display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: 10, fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 },
+  infoBox: {
+    display: 'flex', gap: 12, marginBottom: 28,
+  },
+  infoItem: {
+    flex: 1, padding: '12px 14px',
+    background: 'var(--bg2)', border: '1px solid var(--border)',
+    borderRadius: 'var(--radius)',
+  },
+  infoLabel: {
+    fontSize: 10, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace',
+    color: 'var(--text3)', textTransform: 'uppercase' as const,
+    letterSpacing: 1, marginBottom: 4,
+  },
+  infoTable: {
+    fontSize: 11, fontFamily: 'JetBrains Mono, monospace',
+    color: 'var(--accent)', marginBottom: 2,
+  },
+  infoDesc: {
+    fontSize: 11, color: 'var(--text2)', lineHeight: 1.5,
+  },
 };
 
 function aiBadge(ai?: string) {
@@ -55,6 +75,20 @@ export default function Snapshots() {
       <main style={S.main}>
         <div style={S.title}>📸 스냅샷</div>
         <div style={S.sub}>{loading ? '로딩 중...' : `${snaps.length}개의 저장된 AI 대화`}</div>
+
+        {/* 테이블 역할 안내 */}
+        <div style={S.infoBox}>
+          <div style={S.infoItem}>
+            <div style={S.infoLabel}>이 페이지</div>
+            <div style={S.infoTable}>hajunai_conversations</div>
+            <div style={S.infoDesc}>Chrome 확장에서 저장한 AI 대화 스냅샷. Claude·ChatGPT·Gemini 등 실제 대화 내용을 보관합니다.</div>
+          </div>
+          <div style={S.infoItem}>
+            <div style={S.infoLabel}>대시보드 (contexts)</div>
+            <div style={S.infoTable}>contexts</div>
+            <div style={S.infoDesc}>샤크팀 AI 핸드오프용 맥락 저장소. 개발 진행 상황·다음 행동·헬스 스코어를 관리합니다.</div>
+          </div>
+        </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: selected ? '1fr 1fr' : '1fr', gap: 16 }}>
           {/* 목록 */}
