@@ -37,6 +37,7 @@ async function getMindWorld() {
 
   // 1. 씨앗방 전체 조회
   const allRooms = await supabaseGet('corenull_rooms?house_id=eq.' + HOUSE_ID);
+  console.log('[MindWorld] allRooms:', allRooms.length, JSON.stringify(allRooms).substring(0, 200));
   const seedRooms = allRooms.filter((r: any) => r.seed_mode === true);
   console.log('[MindWorld] seedRooms:', seedRooms.length);
 
