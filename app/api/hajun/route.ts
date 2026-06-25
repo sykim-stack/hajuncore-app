@@ -1,214 +1,272 @@
+// app/api/hajun/route.ts
+// BRAINPOOL 계약: throw 금지, _error 필드 사용, 200/500만
+// action: contexts | snapshots | update_context | chat
+
 import { supabaseGet, supabasePatch } from '@/lib/supabase';
 
-const HOUSE_ID = '9b06b568-a0c9-4b88-8768-e5acbdaf156a';
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const SUPABASE_URL = process.env.SUPABASE_URL!;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
+const GEMINI_KEY = process.env.GEMINI_API_KEY!;
+const HOUSE_ID = '6341b872-4555-4fdc-8f1d-8009b2b1764f';
 
-async function analyzeWithGemini(prompt: string): Promise<string> {
-  if (!GEMINI_API_KEY) return '(Gemini API Key 없음)';
+function createTraceId() {
+  return 'tr-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+}
+
+// ── MindWorld 최신 결과 가져오기 ──────────────────────────────
+async function fetchMindWorldSummary(): Promise<string> {
   try {
     const res = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + GEMINI_API_KEY,
+      `${SUPABASE_URL}/rest/v1/corenull_rooms?house_id=eq.${HOUSE_ID}&order=updated_at.desc&limit=5`,
       {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.3,
-            maxOutputTokens: 1024,
-            thinkingConfig: { thinkingBudget: 0 }
-          }
-        })
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+        },
+        cache: 'no-store',
       }
     );
-    const data = await res.json();
-    if (data.error) return '(Gemini 오류: ' + data.error.message + ')';
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || '(분석 실패)';
-  } catch(e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return '(Gemini 예외: ' + msg + ')';
+    if (!res.ok) return '씨앗 데이터 없음';
+    const rooms = await res.json();
+    if (!rooms || rooms.length === 0) return '씨앗 데이터 없음';
+    return rooms
+      .map((r: { name?: string; fruit_state?: string; updated_at?: string }) =>
+        `- ${r.name || '이름없음'} (${r.fruit_state || 'unknown'}) | ${r.updated_at?.slice(0, 10) || ''}`
+      )
+      .join('\n');
+  } catch {
+    return '씨앗 데이터 조회 실패';
   }
 }
 
-async function getMindWorld() {
-  const today = new Date().toISOString().split('T')[0];
-  const threeDaysLater = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-
-  // 1. 씨앗방 전체 조회
-  const allRooms = await supabaseGet('corenull_rooms?house_id=eq.' + HOUSE_ID);
-  console.log('[MindWorld] allRooms:', allRooms.length, JSON.stringify(allRooms).substring(0, 200));
-  const seedRooms = allRooms.filter((r: any) => r.seed_mode === true);
-  console.log('[MindWorld] seedRooms:', seedRooms.length);
-
-  const allRoomIds = allRooms.map((r: any) => r.id);
-  if (allRoomIds.length === 0) {
-    return {
-      message: '하준님, 아직 방이 없어요. 첫 씨앗을 심어볼까요?',
-      seeds: { total: 0, bloomingSoon: [], bloomed: [], neglected: [], active: [] },
-      fruits: { unharvested: [], harvested: [] },
-      recentActivity: [],
-      today
-    };
+// ── contexts 최신 1건 가져오기 ────────────────────────────────
+async function fetchContextSummary(): Promise<string> {
+  try {
+    const data = await supabaseGet('contexts?order=updated_at.desc&limit=1');
+    if (!data || data.length === 0) return '개발 맥락 없음';
+    const c = data[0];
+    const parts: string[] = [];
+    if (c.phase) parts.push(`페이즈: ${c.phase}`);
+    if (c.status) parts.push(`상태: ${c.status}`);
+    if (c.last_task) parts.push(`마지막 작업: ${c.last_task}`);
+    if (c.next_action) parts.push(`다음 액션: ${c.next_action}`);
+    if (c.current_problems && c.current_problems !== '없음')
+      parts.push(`현재 문제: ${c.current_problems}`);
+    if (c.summary) parts.push(`요약: ${c.summary}`);
+    if (Array.isArray(c.next_tasks) && c.next_tasks.length > 0)
+      parts.push(`다음 작업:\n${c.next_tasks.map((t: string) => `  - ${t}`).join('\n')}`);
+    return parts.join('\n') || '맥락 데이터 파싱 실패';
+  } catch {
+    return '개발 맥락 조회 실패';
   }
-
-  const roomIdList = allRoomIds.join(',');
-
-  // 2. post 조회 (씨앗 활동 분석용)
-  const recentPosts = await supabaseGet(
-    'messages?room_id=in.(' + roomIdList + ')' +
-    '&type=eq.post' +
-    '&order=created_at.desc&limit=50'
-  );
-
-  // 3. 미수확 열매 — 알려주기만, 결정 대행 금지
-  const unharvestedFruits = await supabaseGet(
-    'messages?room_id=in.(' + roomIdList + ')' +
-    '&type=eq.fruit' +
-    '&harvested_at=is.null' +
-    '&order=created_at.desc'
-  );
-
-  // 4. 수확된 열매 (최근 5개)
-  const harvestedFruits = await supabaseGet(
-    'messages?room_id=in.(' + roomIdList + ')' +
-    '&type=eq.fruit' +
-    '&harvested_at=not.is.null' +
-    '&order=harvested_at.desc&limit=5'
-  );
-
-  console.log('[MindWorld] unharvestedFruits:', unharvestedFruits.length);
-  console.log('[MindWorld] harvestedFruits:', harvestedFruits.length);
-
-  // 5. 꽃 피기 임박 / 이미 꽃 핀 씨앗
-  const bloomingSoon = seedRooms.filter((r: any) =>
-    r.bloom_date && r.bloom_date >= today && r.bloom_date <= threeDaysLater
-  );
-  const bloomed = seedRooms.filter((r: any) =>
-    r.bloom_date && r.bloom_date < today
-  );
-
-  // 6. 씨앗방별 마지막 post 날짜
-  const lastPostByRoom: Record<string, string> = {};
-  for (const m of recentPosts) {
-    if (!lastPostByRoom[m.room_id]) lastPostByRoom[m.room_id] = m.created_at;
-  }
-
-  // 7. 방치된 씨앗 / 활동한 씨앗
-  const neglectedSeeds = seedRooms.filter((r: any) => {
-    const last = lastPostByRoom[r.id];
-    if (!last) return true;
-    return last < sevenDaysAgo;
-  });
-  const activeSeeds = seedRooms.filter((r: any) => {
-    const last = lastPostByRoom[r.id];
-    return last && last >= sevenDaysAgo;
-  });
-
-  // 8. 최근 활동 요약
-  const recentActivity = recentPosts.slice(0, 5).map((m: any) => ({
-    room_id: m.room_id,
-    content: m.content?.substring(0, 50),
-    created_at: m.created_at
-  }));
-
-  // 9. room_id → room_name 매핑 (Fruit 표시용)
-  const roomNameMap: Record<string, string> = {};
-  for (const r of allRooms) roomNameMap[r.id] = r.room_name;
-
-  const unharvestedList = unharvestedFruits.map((m: any) => ({
-    content: m.content?.substring(0, 50),
-    room_name: roomNameMap[m.room_id] || '알 수 없는 방',
-    created_at: m.created_at
-  }));
-
-  const harvestedList = harvestedFruits.map((m: any) => ({
-    content: m.content?.substring(0, 50),
-    room_name: roomNameMap[m.room_id] || '알 수 없는 방',
-    harvested_at: m.harvested_at
-  }));
-
-  // 10. Gemini 프롬프트 — 우선순위: 꽃 임박 > 미수확 열매 > 꽃 핌 > 방치 > 응원
-  const geminiPrompt = `당신은 BRAINPOOL의 HajunAI입니다. 사용자의 삶의 흐름을 따뜻하게 읽어주는 AI입니다.
-HajunAI는 알려주기만 합니다. Fruit 생성이나 Harvest는 절대 대신 결정하지 않습니다.
-아래 데이터를 보고 사용자에게 건네는 한마디를 작성해주세요.
-형식: "하준님, [따뜻하고 구체적인 한마디]"
-100자 이내, 마크다운 금지.
-
-오늘 날짜: ${today}
-씨앗방 목록: ${JSON.stringify(seedRooms.map((r: any) => ({ name: r.room_name, bloom_date: r.bloom_date, last_post: lastPostByRoom[r.id] || null })))}
-꽃 피기 임박 (3일 이내): ${JSON.stringify(bloomingSoon.map((r: any) => ({ name: r.room_name, bloom_date: r.bloom_date })))}
-이미 꽃 핀 씨앗: ${JSON.stringify(bloomed.map((r: any) => ({ name: r.room_name, bloom_date: r.bloom_date })))}
-이번 주 기록 없는 씨앗: ${JSON.stringify(neglectedSeeds.map((r: any) => ({ name: r.room_name })))}
-미수확 열매: ${JSON.stringify(unharvestedList)}
-수확된 열매: ${JSON.stringify(harvestedList)}
-
-우선순위: 꽃 피기 임박 > 미수확 열매 존재 > 이미 꽃 핀 씨앗 > 이번 주 활동 없음 > 일반 응원`;
-
-  const message = await analyzeWithGemini(geminiPrompt);
-
-  return {
-    message,
-    seeds: {
-      total: seedRooms.length,
-      bloomingSoon: bloomingSoon.map((r: any) => ({ name: r.room_name, bloom_date: r.bloom_date })),
-      bloomed: bloomed.map((r: any) => ({ name: r.room_name, bloom_date: r.bloom_date })),
-      neglected: neglectedSeeds.map((r: any) => ({ name: r.room_name, last_post: lastPostByRoom[r.id] || null })),
-      active: activeSeeds.map((r: any) => r.room_name)
-    },
-    fruits: {
-      unharvested: unharvestedList,
-      harvested: harvestedList
-    },
-    recentActivity,
-    today
-  };
 }
 
+// ── 대화 hajunai_conversations에 저장 ────────────────────────
+async function saveConversation(payload: {
+  source_ai: string;
+  original_message: string;
+  summary: string;
+  keywords: string[];
+}) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/hajunai_conversations`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({
+        ...payload,
+        created_at: new Date().toISOString(),
+      }),
+    });
+  } catch {
+    // 저장 실패해도 응답은 반환
+  }
+}
+
+// ── Gemini 호출 ───────────────────────────────────────────────
+async function callGemini(systemPrompt: string, userMessage: string, history: Array<{ role: string; content: string }>) {
+  const contents: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+
+  // 히스토리 변환 (user/model 교대)
+  for (const h of history) {
+    contents.push({
+      role: h.role === 'user' ? 'user' : 'model',
+      parts: [{ text: h.content }],
+    });
+  }
+
+  // 현재 메시지
+  contents.push({ role: 'user', parts: [{ text: userMessage }] });
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        contents,
+        generationConfig: {
+          temperature: 0.4,
+          maxOutputTokens: 1024,
+        },
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    const errText = await res.text();
+    return { _error: `Gemini API 오류: ${errText}` };
+  }
+
+  const data = await res.json();
+  const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  return { text: raw };
+}
+
+// ── Observations 파싱 ─────────────────────────────────────────
+// Gemini가 "관찰:" 섹션을 포함하면 분리, 없으면 observations 비어있음
+function parseReply(raw: string): { reply: string; observations: string[] } {
+  const obsMarkers = ['관찰:', '관찰 :', 'Observations:', '관찰사항:'];
+  let splitIdx = -1;
+  let marker = '';
+  for (const m of obsMarkers) {
+    const idx = raw.indexOf(m);
+    if (idx !== -1 && (splitIdx === -1 || idx < splitIdx)) {
+      splitIdx = idx;
+      marker = m;
+    }
+  }
+
+  if (splitIdx === -1) {
+    return { reply: raw.trim(), observations: [] };
+  }
+
+  const reply = raw.slice(0, splitIdx).trim();
+  const obsPart = raw.slice(splitIdx + marker.length).trim();
+  const observations = obsPart
+    .split('\n')
+    .map((l) => l.replace(/^[-–•*]\s*/, '').trim())
+    .filter(Boolean);
+
+  return { reply, observations };
+}
+
+// ═══════════════════════════════════════════════════════════════
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const action = searchParams.get('action');
 
   try {
     if (action === 'contexts') {
-  const projectId = searchParams.get('project_id') || 'aaaaaaaa-0000-0000-0000-000000000001';
-  const data = await supabaseGet('contexts?project_id=eq.' + projectId + '&order=updated_at.desc&limit=1');
-  return Response.json({ payload: data[0] || null });
-  }
+      const data = await supabaseGet('contexts?order=updated_at.desc&limit=1');
+      return Response.json({ payload: data[0] || null });
+    }
+
     if (action === 'snapshots') {
       const limit = searchParams.get('limit') || '20';
-      const data = await supabaseGet('hajunai_conversations?order=created_at.desc&limit=' + limit);
+      const aiFilter = searchParams.get('ai');
+      let path = `hajunai_conversations?order=created_at.desc&limit=${limit}`;
+      if (aiFilter) path += `&source_ai=eq.${encodeURIComponent(aiFilter)}`;
+      const data = await supabaseGet(path);
       return Response.json({ payload: data });
     }
-    if (action === 'mindworld') {
-      const data = await getMindWorld();
-      return Response.json({ payload: data });
-    }
-    return Response.json({ _error: 'unknown action' }, { status: 200 });
+
+    return Response.json({ _error: '알 수 없는 action' }, { status: 200 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return Response.json({ _error: msg }, { status: 500 });
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
 export async function POST(req: Request) {
   const { searchParams } = new URL(req.url);
   const action = searchParams.get('action');
+  const traceId = createTraceId();
 
   try {
-    const body = JSON.parse(await req.text());
+    const rawBody = await req.text();
+    // BOM 제거
+    const cleanBody = rawBody.replace(/^\uFEFF/, '');
+    const body = JSON.parse(cleanBody);
+
+    // ── update_context ─────────────────────────────────────────
     if (action === 'update_context') {
       const { id, ...fields } = body;
-      if (!id) return Response.json({ _error: 'id required' }, { status: 200 });
+      if (!id) return Response.json({ _error: 'id 필요', traceId }, { status: 200 });
       const data = await supabasePatch('contexts', id, {
         ...fields,
         updated_at: new Date().toISOString(),
       });
-      return Response.json({ payload: data[0] || null });
+      return Response.json({ payload: data[0] || null, traceId });
     }
-    return Response.json({ _error: 'unknown action' }, { status: 200 });
+
+    // ── chat ───────────────────────────────────────────────────
+    if (action === 'chat') {
+      const { message, history = [] } = body as {
+        message: string;
+        history: Array<{ role: string; content: string }>;
+      };
+
+      if (!message || typeof message !== 'string' || message.trim() === '') {
+        return Response.json({ _error: '메시지가 비어있습니다', traceId }, { status: 200 });
+      }
+
+      if (!GEMINI_KEY) {
+        return Response.json({ _error: 'GEMINI_API_KEY 환경변수 미설정', traceId }, { status: 200 });
+      }
+
+      // 맥락 수집
+      const [contextSummary, mindWorldSummary] = await Promise.all([
+        fetchContextSummary(),
+        fetchMindWorldSummary(),
+      ]);
+
+      const systemPrompt = `당신은 HajunAI입니다. BRAINPOOL 프로젝트의 개인 전략 비서입니다.
+질문에 단순히 답하는 AI가 아니라, 프로젝트와 삶의 흐름을 이해하고
+현재 상태를 분석하여 다음에 필요한 것을 알려주는 비서입니다.
+
+규칙:
+- 핵심만 간결하게 답하세요.
+- 마크다운 금지 (**, ##, - 목록 등 사용하지 말 것).
+- 한국어로만 답하세요.
+- 제안은 하되 강요하지 않습니다. 사용자 대신 결정하지 않습니다.
+- 필요하다고 판단되면 답변 끝에 "관찰:" 섹션을 추가하세요.
+  형식: 관찰:\n- 항목1\n- 항목2
+
+현재 개발 맥락:
+${contextSummary}
+
+현재 씨앗/공간 상태 (MindWorld):
+${mindWorldSummary}`;
+
+      const geminiResult = await callGemini(systemPrompt, message.trim(), history);
+
+      if (geminiResult._error) {
+        return Response.json({ _error: geminiResult._error, traceId }, { status: 200 });
+      }
+
+      const { reply, observations } = parseReply(geminiResult.text || '');
+
+      // 대화 저장 (비동기, 실패해도 무시)
+      saveConversation({
+        source_ai: 'HajunAI',
+        original_message: `[사용자] ${message}\n[HajunAI] ${reply}`,
+        summary: reply.slice(0, 100),
+        keywords: ['chat', 'hajunai'],
+      });
+
+      return Response.json({ reply, observations, traceId });
+    }
+
+    return Response.json({ _error: '알 수 없는 action', traceId }, { status: 200 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    return Response.json({ _error: msg }, { status: 500 });
+    return Response.json({ _error: msg, traceId }, { status: 500 });
   }
 }
