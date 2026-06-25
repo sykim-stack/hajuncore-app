@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import Sidebar from '@/components/Sidebar';
 
 type Message = {
@@ -8,7 +9,8 @@ type Message = {
   observations?: string[];
 };
 
-const S: Record<string, React.CSSProperties> = {
+// 정적 스타일 (함수 제외)
+const S: Record<string, CSSProperties> = {
   page: { display: 'flex', minHeight: '100vh', background: 'var(--bg)' },
   main: {
     flex: 1,
@@ -37,26 +39,6 @@ const S: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     gap: 16,
   },
-  bubble: (role: 'user' | 'assistant'): React.CSSProperties => ({
-    maxWidth: '78%',
-    alignSelf: role === 'user' ? 'flex-end' : 'flex-start',
-    background: role === 'user' ? 'rgba(88,166,255,0.12)' : 'var(--bg2)',
-    border:
-      role === 'user'
-        ? '1px solid rgba(88,166,255,0.3)'
-        : '1px solid var(--border)',
-    borderRadius: role === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
-    padding: '10px 14px',
-  }),
-  roleLabel: (role: 'user' | 'assistant'): React.CSSProperties => ({
-    fontSize: 9,
-    fontWeight: 700,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-    color: role === 'user' ? 'var(--accent)' : 'var(--accent2)',
-    fontFamily: 'JetBrains Mono, monospace',
-    marginBottom: 4,
-  }),
   text: {
     fontSize: 13,
     color: 'var(--text)',
@@ -75,7 +57,7 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: 9,
     fontWeight: 700,
     letterSpacing: 1,
-    textTransform: 'uppercase' as const,
+    textTransform: 'uppercase',
     color: 'var(--accent2)',
     fontFamily: 'JetBrains Mono, monospace',
     marginBottom: 6,
@@ -141,6 +123,34 @@ const S: Record<string, React.CSSProperties> = {
   },
 };
 
+// 동적 스타일 헬퍼 (S 객체 밖)
+function bubbleStyle(role: 'user' | 'assistant'): CSSProperties {
+  return {
+    maxWidth: '78%',
+    alignSelf: role === 'user' ? 'flex-end' : 'flex-start',
+    background: role === 'user' ? 'rgba(88,166,255,0.12)' : 'var(--bg2)',
+    border:
+      role === 'user'
+        ? '1px solid rgba(88,166,255,0.3)'
+        : '1px solid var(--border)',
+    borderRadius:
+      role === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
+    padding: '10px 14px',
+  };
+}
+
+function roleLabelStyle(role: 'user' | 'assistant'): CSSProperties {
+  return {
+    fontSize: 9,
+    fontWeight: 700,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    color: role === 'user' ? 'var(--accent)' : 'var(--accent2)',
+    fontFamily: 'JetBrains Mono, monospace',
+    marginBottom: 4,
+  };
+}
+
 const INIT_MESSAGE: Message = {
   role: 'assistant',
   content:
@@ -158,7 +168,6 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
-  // textarea 높이 자동 조절
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
     const ta = e.target;
@@ -179,14 +188,10 @@ export default function ChatPage() {
     }
     setLoading(true);
 
-    // 히스토리 (초기 메시지 제외, INIT_MESSAGE 제외)
     const history = nextMessages
-      .slice(1) // INIT_MESSAGE 제외
-      .slice(-10) // 최근 10개만
-      .map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
+      .slice(1)       // INIT_MESSAGE 제외
+      .slice(-10)     // 최근 10턴
+      .map((m) => ({ role: m.role, content: m.content }));
 
     try {
       const res = await fetch('/api/hajun?action=chat', {
@@ -199,10 +204,7 @@ export default function ChatPage() {
       if (json._error) {
         setMessages((prev) => [
           ...prev,
-          {
-            role: 'assistant',
-            content: `오류: ${json._error}`,
-          },
+          { role: 'assistant', content: `오류: ${json._error}` },
         ]);
       } else {
         setMessages((prev) => [
@@ -210,7 +212,10 @@ export default function ChatPage() {
           {
             role: 'assistant',
             content: json.reply || '(응답 없음)',
-            observations: json.observations?.length > 0 ? json.observations : undefined,
+            observations:
+              Array.isArray(json.observations) && json.observations.length > 0
+                ? json.observations
+                : undefined,
           },
         ]);
       }
@@ -234,9 +239,7 @@ export default function ChatPage() {
     }
   };
 
-  const clearChat = () => {
-    setMessages([INIT_MESSAGE]);
-  };
+  const clearChat = () => setMessages([INIT_MESSAGE]);
 
   return (
     <div style={S.page}>
@@ -244,7 +247,13 @@ export default function ChatPage() {
       <main style={S.main}>
         {/* 헤더 */}
         <div style={S.header}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}
+          >
             <div>
               <div style={S.title}>🧠 HajunAI</div>
               <div style={S.sub}>contexts + MindWorld 기반 전략 비서</div>
@@ -270,8 +279,8 @@ export default function ChatPage() {
         {/* 메시지 목록 */}
         <div style={S.messages}>
           {messages.map((m, i) => (
-            <div key={i} style={S.bubble(m.role)}>
-              <div style={S.roleLabel(m.role)}>
+            <div key={i} style={bubbleStyle(m.role)}>
+              <div style={roleLabelStyle(m.role)}>
                 {m.role === 'user' ? '나' : 'HajunAI'}
               </div>
               <div style={S.text}>{m.content}</div>
@@ -279,7 +288,14 @@ export default function ChatPage() {
                 <div style={S.obsBox}>
                   <div style={S.obsLabel}>관찰</div>
                   {m.observations.map((obs, j) => (
-                    <div key={j} style={{ ...S.obsItem, marginBottom: j < m.observations!.length - 1 ? 4 : 0 }}>
+                    <div
+                      key={j}
+                      style={{
+                        ...S.obsItem,
+                        marginBottom:
+                          j < (m.observations as string[]).length - 1 ? 4 : 0,
+                      }}
+                    >
                       · {obs}
                     </div>
                   ))}
@@ -288,9 +304,7 @@ export default function ChatPage() {
             </div>
           ))}
 
-          {loading && (
-            <div style={S.thinking}>HajunAI가 생각 중...</div>
-          )}
+          {loading && <div style={S.thinking}>HajunAI가 생각 중...</div>}
 
           <div ref={bottomRef} />
         </div>
