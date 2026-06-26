@@ -264,6 +264,91 @@ ${mindWorldSummary}`;
       return Response.json({ reply, observations, traceId });
     }
 
+    // ── summarize_context ──────────────────────────────────────
+    if (action === 'summarize_context') {
+      if (!GEMINI_KEY) {
+        return Response.json({ _error: 'GEMINI_API_KEY 환경변수 미설정', traceId }, { status: 200 });
+      }
+
+      // hajunai_conversations 전체 읽기
+      let allConversations = '';
+      try {
+        const convData = await supabaseGet(
+          'hajunai_conversations?order=created_at.asc&select=original_message,source_ai,created_at'
+        );
+        if (!convData || convData.length === 0) {
+          return Response.json({ _error: '저장된 대화가 없습니다', traceId }, { status: 200 });
+        }
+        allConversations = convData
+          .map((c: { source_ai?: string; original_message?: string; created_at?: string }) =>
+            `[${c.created_at?.slice(0, 10) || ''}][${c.source_ai || 'AI'}]\n${c.original_message || ''}`
+          )
+          .join('\n\n---\n\n');
+      } catch {
+        return Response.json({ _error: '대화 데이터 조회 실패', traceId }, { status: 200 });
+      }
+
+      // 기존 contexts 참고용으로 읽기
+      const currentContext = await fetchContextSummary();
+
+      const summarizePrompt = `당신은 BRAINPOOL 프로젝트의 맥락 분석 AI입니다.
+아래 전체 대화 기록을 읽고, 현재 프로젝트 맥락을 정확하게 요약하세요.
+
+기존 맥락 (참고):
+${currentContext}
+
+전체 대화 기록:
+${allConversations}
+
+반드시 유효한 JSON만 출력하세요. 마크다운 금지. 설명 금지.
+
+필드:
+- "last_task": 가장 최근에 진행한 핵심 작업 (한 줄, 80자 이내)
+- "summary": 전체 프로젝트 현재 상태 요약 (150자 이내, 줄바꿈 없이 한 줄)
+- "next_action": 지금 당장 해야 할 것 (한 줄, 형식: "구현: [작업명] - [위치/방법]")
+- "current_problems": 현재 문제점 (없으면 "없음", 있으면 한 줄 요약)`;
+
+      const geminiRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: summarizePrompt }] }],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 512 },
+          }),
+        }
+      );
+
+      if (!geminiRes.ok) {
+        const errText = await geminiRes.text();
+        return Response.json({ _error: `Gemini 오류: ${errText}`, traceId }, { status: 200 });
+      }
+
+      const geminiData = await geminiRes.json();
+      const rawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+      // JSON 파싱
+      let parsed: Record<string, string> = {};
+      try {
+        const cleaned = rawText.replace(/```json\s*/g, '').replace(/```/g, '').trim();
+        const match = cleaned.match(/\{[\s\S]*\}/);
+        if (match) parsed = JSON.parse(match[0]);
+      } catch {
+        return Response.json({ _error: 'Gemini 응답 파싱 실패', raw: rawText, traceId }, { status: 200 });
+      }
+
+      return Response.json({
+        summary: {
+          last_task: parsed.last_task || '',
+          summary: parsed.summary || '',
+          next_action: parsed.next_action || '',
+          current_problems: parsed.current_problems || '없음',
+        },
+        traceId,
+      });
+    }
+
     return Response.json({ _error: '알 수 없는 action', traceId }, { status: 200 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
