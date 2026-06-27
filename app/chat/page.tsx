@@ -16,6 +16,8 @@ type ContextDraft = {
   current_problems: string;
 };
 
+const STORAGE_KEY = 'hajunai_chat_messages';
+
 const S: Record<string, CSSProperties> = {
   page: { display: 'flex', minHeight: '100vh', background: 'var(--bg)' },
   main: { flex: 1, display: 'flex', flexDirection: 'column', maxHeight: '100vh', overflow: 'hidden' },
@@ -35,7 +37,6 @@ const S: Record<string, CSSProperties> = {
   sendBtnDisabled: { background: 'var(--bg3)', color: 'var(--text3)', cursor: 'not-allowed' },
   hint: { fontSize: 10, color: 'var(--text3)', marginTop: 6, fontFamily: 'JetBrains Mono, monospace' },
   thinking: { alignSelf: 'flex-start', fontSize: 12, color: 'var(--text3)', fontStyle: 'italic', padding: '4px 0' },
-  // 맥락 패널
   panel: { width: 300, borderLeft: '1px solid var(--border)', background: 'var(--bg2)', display: 'flex', flexDirection: 'column', flexShrink: 0, overflowY: 'auto' },
   panelHeader: { padding: '14px 16px 10px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   panelTitle: { fontSize: 12, fontWeight: 700, color: 'var(--text2)', fontFamily: 'JetBrains Mono, monospace' },
@@ -47,6 +48,7 @@ const S: Record<string, CSSProperties> = {
   saveBtn: { width: '100%', padding: '9px', background: 'var(--accent2)', border: 'none', borderRadius: 7, color: '#0D1117', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif' },
   saveBtnDisabled: { background: 'var(--bg3)', color: 'var(--text3)', cursor: 'not-allowed' },
   statusMsg: { fontSize: 11, textAlign: 'center', padding: '4px 0', fontFamily: 'JetBrains Mono, monospace' },
+  clearBtn: { background: 'none', border: '1px solid var(--border)', color: 'var(--text3)', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer', fontFamily: 'JetBrains Mono, monospace' },
 };
 
 function bubbleStyle(role: 'user' | 'assistant'): CSSProperties {
@@ -75,8 +77,29 @@ const INIT_MESSAGE: Message = {
 
 const EMPTY_DRAFT: ContextDraft = { last_task: '', summary: '', next_action: '', current_problems: '' };
 
+// localStorage 헬퍼
+function loadMessages(): Message[] {
+  if (typeof window === 'undefined') return [INIT_MESSAGE];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [INIT_MESSAGE];
+    const parsed = JSON.parse(raw) as Message[];
+    return parsed.length > 0 ? parsed : [INIT_MESSAGE];
+  } catch {
+    return [INIT_MESSAGE];
+  }
+}
+
+function saveMessages(msgs: Message[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(msgs));
+  } catch { /* 저장 실패 무시 */ }
+}
+
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([INIT_MESSAGE]);
+  const [hydrated, setHydrated] = useState(false);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -86,6 +109,17 @@ export default function ChatPage() {
   const [statusMsg, setStatusMsg] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // 마운트 시 localStorage 복원
+  useEffect(() => {
+    setMessages(loadMessages());
+    setHydrated(true);
+  }, []);
+
+  // 메시지 변경 시 localStorage 저장 (hydration 후에만)
+  useEffect(() => {
+    if (hydrated) saveMessages(messages);
+  }, [messages, hydrated]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -124,11 +158,15 @@ export default function ChatPage() {
         setMessages((prev) => [...prev, {
           role: 'assistant',
           content: json.reply || '(응답 없음)',
-          observations: Array.isArray(json.observations) && json.observations.length > 0 ? json.observations : undefined,
+          observations: Array.isArray(json.observations) && json.observations.length > 0
+            ? json.observations : undefined,
         }]);
       }
     } catch (e) {
-      setMessages((prev) => [...prev, { role: 'assistant', content: `네트워크 오류: ${e instanceof Error ? e.message : String(e)}` }]);
+      setMessages((prev) => [...prev, {
+        role: 'assistant',
+        content: `네트워크 오류: ${e instanceof Error ? e.message : String(e)}`,
+      }]);
     } finally {
       setLoading(false);
     }
@@ -138,7 +176,12 @@ export default function ChatPage() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   };
 
-  // ── 맥락 요약 실행 ──────────────────────────────────────────
+  const clearChat = () => {
+    setMessages([INIT_MESSAGE]);
+    localStorage.removeItem(STORAGE_KEY);
+  };
+
+  // ── 맥락 요약 실행 ────────────────────────────────────────
   const analyzeContext = async () => {
     setAnalyzing(true);
     setStatusMsg('');
@@ -163,16 +206,15 @@ export default function ChatPage() {
     }
   };
 
-  // ── contexts 저장 ────────────────────────────────────────────
+  // ── contexts 저장 ─────────────────────────────────────────
   const saveContext = async () => {
     setSaving(true);
     setStatusMsg('');
     try {
-      // contexts id 먼저 가져오기
       const ctxRes = await fetch('/api/hajun?action=contexts');
       const ctxJson = await ctxRes.json();
       const id = ctxJson.payload?.id;
-      if (!id) { setStatusMsg('❌ contexts ID 없음'); return; }
+      if (!id) { setStatusMsg('❌ contexts ID 없음'); setSaving(false); return; }
 
       const res = await fetch('/api/hajun?action=update_context', {
         method: 'POST',
@@ -202,14 +244,9 @@ export default function ChatPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={S.title}>🧠 HajunAI</div>
-              <div style={S.sub}>contexts + MindWorld 기반 전략 비서</div>
+              <div style={S.sub}>Groq(채팅) + Gemini(요약) · contexts + MindWorld 기반</div>
             </div>
-            <button
-              onClick={() => setMessages([INIT_MESSAGE])}
-              style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--text3)', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer', fontFamily: 'JetBrains Mono, monospace' }}
-            >
-              대화 초기화
-            </button>
+            <button style={S.clearBtn} onClick={clearChat}>대화 초기화</button>
           </div>
         </div>
 
@@ -257,7 +294,7 @@ export default function ChatPage() {
                   전송
                 </button>
               </div>
-              <div style={S.hint}>세션 대화는 최근 10턴 유지 · 저장: hajunai_conversations</div>
+              <div style={S.hint}>대화는 브라우저에 저장됩니다 · 저장: hajunai_conversations</div>
             </div>
           </div>
 

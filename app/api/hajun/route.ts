@@ -1,30 +1,26 @@
 // app/api/hajun/route.ts
 // BRAINPOOL 계약: throw 금지, _error 필드 사용, 200/500만
-// action: contexts | snapshots | update_context | chat
+// action: contexts | snapshots | update_context | chat | summarize_context
+// 채팅: Groq (llama-3.3-70b-versatile) / 요약: Gemini 2.5 Flash
 
 import { supabaseGet, supabasePatch } from '@/lib/supabase';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
-const GEMINI_KEY = process.env.GEMINI_API_KEY!;
-const HOUSE_ID = '6341b872-4555-4fdc-8f1d-8009b2b1764f';
+const GEMINI_KEY  = process.env.GEMINI_API_KEY!;
+const GROQ_KEY    = process.env.GROQ_API_KEY!;
+const HOUSE_ID    = '6341b872-4555-4fdc-8f1d-8009b2b1764f';
 
 function createTraceId() {
   return 'tr-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
 }
 
-// ── MindWorld 최신 결과 가져오기 ──────────────────────────────
+// ── MindWorld 최신 결과 ───────────────────────────────────────
 async function fetchMindWorldSummary(): Promise<string> {
   try {
     const res = await fetch(
       `${SUPABASE_URL}/rest/v1/corenull_rooms?house_id=eq.${HOUSE_ID}&order=updated_at.desc&limit=5`,
-      {
-        headers: {
-          apikey: SUPABASE_KEY,
-          Authorization: `Bearer ${SUPABASE_KEY}`,
-        },
-        cache: 'no-store',
-      }
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, cache: 'no-store' }
     );
     if (!res.ok) return '씨앗 데이터 없음';
     const rooms = await res.json();
@@ -39,7 +35,7 @@ async function fetchMindWorldSummary(): Promise<string> {
   }
 }
 
-// ── contexts 최신 1건 가져오기 ────────────────────────────────
+// ── contexts 최신 1건 ─────────────────────────────────────────
 async function fetchContextSummary(): Promise<string> {
   try {
     const data = await supabaseGet('contexts?order=updated_at.desc&limit=1');
@@ -61,7 +57,7 @@ async function fetchContextSummary(): Promise<string> {
   }
 }
 
-// ── 대화 hajunai_conversations에 저장 ────────────────────────
+// ── 대화 저장 ─────────────────────────────────────────────────
 async function saveConversation(payload: {
   source_ai: string;
   original_message: string;
@@ -77,59 +73,48 @@ async function saveConversation(payload: {
         'Content-Type': 'application/json',
         Prefer: 'return=minimal',
       },
-      body: JSON.stringify({
-        ...payload,
-        created_at: new Date().toISOString(),
-      }),
+      body: JSON.stringify({ ...payload, created_at: new Date().toISOString() }),
     });
-  } catch {
-    // 저장 실패해도 응답은 반환
-  }
+  } catch { /* 저장 실패해도 응답은 반환 */ }
 }
 
-// ── Gemini 호출 ───────────────────────────────────────────────
-async function callGemini(systemPrompt: string, userMessage: string, history: Array<{ role: string; content: string }>) {
-  const contents: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+// ── Groq 호출 (채팅용) ────────────────────────────────────────
+async function callGroq(
+  systemPrompt: string,
+  userMessage: string,
+  history: Array<{ role: string; content: string }>
+) {
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history.map((h) => ({ role: h.role === 'user' ? 'user' : 'assistant', content: h.content })),
+    { role: 'user', content: userMessage },
+  ];
 
-  // 히스토리 변환 (user/model 교대)
-  for (const h of history) {
-    contents.push({
-      role: h.role === 'user' ? 'user' : 'model',
-      parts: [{ text: h.content }],
-    });
-  }
-
-  // 현재 메시지
-  contents.push({ role: 'user', parts: [{ text: userMessage }] });
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: systemPrompt }] },
-        contents,
-        generationConfig: {
-          temperature: 0.4,
-          maxOutputTokens: 1024,
-        },
-      }),
-    }
-  );
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${GROQ_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages,
+      temperature: 0.4,
+      max_tokens: 1024,
+    }),
+  });
 
   if (!res.ok) {
     const errText = await res.text();
-    return { _error: `Gemini API 오류: ${errText}` };
+    return { _error: `Groq API 오류: ${errText}` };
   }
 
   const data = await res.json();
-  const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  return { text: raw };
+  const text = data.choices?.[0]?.message?.content || '';
+  return { text };
 }
 
 // ── Observations 파싱 ─────────────────────────────────────────
-// Gemini가 "관찰:" 섹션을 포함하면 분리, 없으면 observations 비어있음
 function parseReply(raw: string): { reply: string; observations: string[] } {
   const obsMarkers = ['관찰:', '관찰 :', 'Observations:', '관찰사항:'];
   let splitIdx = -1;
@@ -141,10 +126,7 @@ function parseReply(raw: string): { reply: string; observations: string[] } {
       marker = m;
     }
   }
-
-  if (splitIdx === -1) {
-    return { reply: raw.trim(), observations: [] };
-  }
+  if (splitIdx === -1) return { reply: raw.trim(), observations: [] };
 
   const reply = raw.slice(0, splitIdx).trim();
   const obsPart = raw.slice(splitIdx + marker.length).trim();
@@ -152,7 +134,6 @@ function parseReply(raw: string): { reply: string; observations: string[] } {
     .split('\n')
     .map((l) => l.replace(/^[-–•*]\s*/, '').trim())
     .filter(Boolean);
-
   return { reply, observations };
 }
 
@@ -191,9 +172,7 @@ export async function POST(req: Request) {
 
   try {
     const rawBody = await req.text();
-    // BOM 제거
-    const cleanBody = rawBody.replace(/^\uFEFF/, '');
-    const body = JSON.parse(cleanBody);
+    const body = JSON.parse(rawBody.replace(/^\uFEFF/, ''));
 
     // ── update_context ─────────────────────────────────────────
     if (action === 'update_context') {
@@ -206,7 +185,7 @@ export async function POST(req: Request) {
       return Response.json({ payload: data[0] || null, traceId });
     }
 
-    // ── chat ───────────────────────────────────────────────────
+    // ── chat (Groq) ────────────────────────────────────────────
     if (action === 'chat') {
       const { message, history = [] } = body as {
         message: string;
@@ -216,12 +195,10 @@ export async function POST(req: Request) {
       if (!message || typeof message !== 'string' || message.trim() === '') {
         return Response.json({ _error: '메시지가 비어있습니다', traceId }, { status: 200 });
       }
-
-      if (!GEMINI_KEY) {
-        return Response.json({ _error: 'GEMINI_API_KEY 환경변수 미설정', traceId }, { status: 200 });
+      if (!GROQ_KEY) {
+        return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
       }
 
-      // 맥락 수집
       const [contextSummary, mindWorldSummary] = await Promise.all([
         fetchContextSummary(),
         fetchMindWorldSummary(),
@@ -245,15 +222,13 @@ ${contextSummary}
 현재 씨앗/공간 상태 (MindWorld):
 ${mindWorldSummary}`;
 
-      const geminiResult = await callGemini(systemPrompt, message.trim(), history);
-
-      if (geminiResult._error) {
-        return Response.json({ _error: geminiResult._error, traceId }, { status: 200 });
+      const groqResult = await callGroq(systemPrompt, message.trim(), history);
+      if (groqResult._error) {
+        return Response.json({ _error: groqResult._error, traceId }, { status: 200 });
       }
 
-      const { reply, observations } = parseReply(geminiResult.text || '');
+      const { reply, observations } = parseReply(groqResult.text || '');
 
-      // 대화 저장 (비동기, 실패해도 무시)
       saveConversation({
         source_ai: 'HajunAI',
         original_message: `[사용자] ${message}\n[HajunAI] ${reply}`,
@@ -264,13 +239,12 @@ ${mindWorldSummary}`;
       return Response.json({ reply, observations, traceId });
     }
 
-    // ── summarize_context ──────────────────────────────────────
+    // ── summarize_context (Gemini 2.5 Flash) ──────────────────
     if (action === 'summarize_context') {
       if (!GEMINI_KEY) {
         return Response.json({ _error: 'GEMINI_API_KEY 환경변수 미설정', traceId }, { status: 200 });
       }
 
-      // hajunai_conversations 전체 읽기
       let allConversations = '';
       try {
         const convData = await supabaseGet(
@@ -288,7 +262,6 @@ ${mindWorldSummary}`;
         return Response.json({ _error: '대화 데이터 조회 실패', traceId }, { status: 200 });
       }
 
-      // 기존 contexts 참고용으로 읽기
       const currentContext = await fetchContextSummary();
 
       const summarizePrompt = `당신은 BRAINPOOL 프로젝트의 맥락 분석 AI입니다.
@@ -328,7 +301,6 @@ ${allConversations}
       const geminiData = await geminiRes.json();
       const rawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-      // JSON 파싱
       let parsed: Record<string, string> = {};
       try {
         const cleaned = rawText.replace(/```json\s*/g, '').replace(/```/g, '').trim();
