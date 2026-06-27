@@ -299,18 +299,11 @@ ${allConversations}
       }
 
       const geminiData = await geminiRes.json();
-      const rawText =
-  geminiData.candidates?.[0]?.content?.parts
-    ?.map((p: { text?: string }) => p.text ?? '')
-    .join('\n') ?? '';
+      const rawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
       let parsed: Record<string, string> = {};
       try {
-        const cleaned = rawText
-  .replace(/<thinking>[\s\S]*?<\/thinking>/g, '')
-  .replace(/```json/g, '')
-  .replace(/```/g, '')
-  .trim();
+        const cleaned = rawText.replace(/```json\s*/g, '').replace(/```/g, '').trim();
         const match = cleaned.match(/\{[\s\S]*\}/);
         if (match) parsed = JSON.parse(match[0]);
       } catch {
