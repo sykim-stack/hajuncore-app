@@ -264,22 +264,23 @@ ${mindWorldSummary}`;
 
       const currentContext = await fetchContextSummary();
 
-      const summarizePrompt = `당신은 BRAINPOOL 프로젝트의 맥락 분석 AI입니다.
-아래 전체 대화 기록을 읽고, 현재 프로젝트 맥락을 정확하게 요약하세요.
+      const summarizePrompt = `You are a JSON-only output machine. Do not write any text outside of the JSON object. No markdown. No explanation. No code fences. Just raw JSON.
 
-기존 맥락 (참고):
+Output exactly this structure:
+{"last_task":"...","summary":"...","next_action":"...","current_problems":"..."}
+
+Rules:
+- last_task: 가장 최근 핵심 작업 (80자 이내, 한 줄)
+- summary: 전체 프로젝트 현재 상태 (150자 이내, 한 줄, 줄바꿈 없음)
+- next_action: 지금 당장 할 것 (한 줄, 예: "구현: CoreHub API - /api/corehub")
+- current_problems: 현재 문제점 (없으면 "없음")
+- 모든 값은 한국어, 쌍따옴표 내 줄바꿈 금지
+
+기존 맥락:
 ${currentContext}
 
 전체 대화 기록:
-${allConversations}
-
-반드시 유효한 JSON만 출력하세요. 마크다운 금지. 설명 금지.
-
-필드:
-- "last_task": 가장 최근에 진행한 핵심 작업 (한 줄, 80자 이내)
-- "summary": 전체 프로젝트 현재 상태 요약 (150자 이내, 줄바꿈 없이 한 줄)
-- "next_action": 지금 당장 해야 할 것 (한 줄, 형식: "구현: [작업명] - [위치/방법]")
-- "current_problems": 현재 문제점 (없으면 "없음", 있으면 한 줄 요약)`;
+${allConversations}`;
 
       const geminiRes = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
@@ -288,7 +289,11 @@ ${allConversations}
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ role: 'user', parts: [{ text: summarizePrompt }] }],
-            generationConfig: { temperature: 0.1, maxOutputTokens: 512 },
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 512,
+              responseMimeType: 'application/json',
+            },
           }),
         }
       );
