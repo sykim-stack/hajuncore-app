@@ -291,7 +291,7 @@ ${allConversations}`;
             contents: [{ role: 'user', parts: [{ text: summarizePrompt }] }],
             generationConfig: {
               temperature: 0.1,
-              maxOutputTokens: 512,
+              maxOutputTokens: 2048,
               responseMimeType: 'application/json',
             },
           }),
