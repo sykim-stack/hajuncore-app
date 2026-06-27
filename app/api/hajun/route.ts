@@ -299,15 +299,42 @@ ${allConversations}
       }
 
       const geminiData = await geminiRes.json();
-      const rawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      // thinking 블록 제거 후 text parts만 수집
+      const parts = geminiData.candidates?.[0]?.content?.parts || [];
+      const rawText = parts
+        .filter((p: { thought?: boolean; text?: string }) => !p.thought && typeof p.text === 'string')
+        .map((p: { text: string }) => p.text)
+        .join('');
 
       let parsed: Record<string, string> = {};
       try {
-        const cleaned = rawText.replace(/```json\s*/g, '').replace(/```/g, '').trim();
-        const match = cleaned.match(/\{[\s\S]*\}/);
-        if (match) parsed = JSON.parse(match[0]);
-      } catch {
-        return Response.json({ _error: 'Gemini 응답 파싱 실패', raw: rawText, traceId }, { status: 200 });
+        // 1차: ```json 블록 추출
+        const fenceMatch = rawText.match(/```json\s*([\s\S]*?)```/);
+        const candidate = fenceMatch ? fenceMatch[1] : rawText;
+        // 2차: { } 범위 추출 (가장 바깥 중괄호)
+        const objMatch = candidate.match(/\{[\s\S]*\}/);
+        if (!objMatch) throw new Error('JSON 객체 없음');
+        // 3차: 줄바꿈/제어문자 정리 후 파싱
+        const cleaned = objMatch[0]
+          .replace(/[\u0000-\u001F&&[^\n\r\t]]/g, ' ')
+          .replace(/,\s*([\]}])/g, '$1'); // trailing comma 제거
+        parsed = JSON.parse(cleaned);
+      } catch (parseErr) {
+        // 4차 fallback: 정규식으로 필드별 직접 추출
+        const extract = (key: string) => {
+          const m = rawText.match(new RegExp(`"${key}"\s*:\s*"([^"]*)"`, 's'));
+          return m ? m[1].trim() : '';
+        };
+        parsed = {
+          last_task:        extract('last_task'),
+          summary:          extract('summary'),
+          next_action:      extract('next_action'),
+          current_problems: extract('current_problems') || '없음',
+        };
+        // 4차도 전부 비어있으면 에러
+        if (!parsed.last_task && !parsed.summary && !parsed.next_action) {
+          return Response.json({ _error: 'Gemini 응답 파싱 실패', raw: rawText.slice(0, 300), traceId }, { status: 200 });
+        }
       }
 
       return Response.json({
