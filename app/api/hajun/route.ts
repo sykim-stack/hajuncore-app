@@ -1,7 +1,13 @@
 // app/api/hajun/route.ts
 // BRAINPOOL 계약: throw 금지, _error 필드 사용, 200/500만
-// action: contexts | snapshots | update_context | chat | summarize_context
+// action: contexts | dev_contexts | snapshots | update_context | chat | summarize_context
 // 채팅: Groq (llama-3.3-70b-versatile) / 요약: Gemini 2.5 Flash
+//
+// v1.1 변경사항:
+// - GET  contexts      → 사람 이해용 contexts (understanding 등 새 구조)
+// - GET  dev_contexts  → 개발 핸드오프 (구 contexts 역할, 신규)
+// - POST update_context → dev_contexts 패치로 라우팅 (하위 호환 유지)
+// - fetchContextSummary() → dev_contexts 읽도록 변경
 
 import { supabaseGet, supabasePatch } from '@/lib/supabase';
 
@@ -35,20 +41,21 @@ async function fetchMindWorldSummary(): Promise<string> {
   }
 }
 
-// ── contexts 최신 1건 ─────────────────────────────────────────
+// ── dev_contexts 최신 1건 (chat 시스템 프롬프트용) ───────────
+// v1.1: contexts → dev_contexts (개발 핸드오프 전용 테이블)
 async function fetchContextSummary(): Promise<string> {
   try {
-    const data = await supabaseGet('contexts?order=updated_at.desc&limit=1');
+    const data = await supabaseGet('dev_contexts?order=updated_at.desc&limit=1');
     if (!data || data.length === 0) return '개발 맥락 없음';
     const c = data[0];
     const parts: string[] = [];
-    if (c.phase) parts.push(`페이즈: ${c.phase}`);
-    if (c.status) parts.push(`상태: ${c.status}`);
-    if (c.last_task) parts.push(`마지막 작업: ${c.last_task}`);
-    if (c.next_action) parts.push(`다음 액션: ${c.next_action}`);
+    if (c.phase)          parts.push(`페이즈: ${c.phase}`);
+    if (c.status)         parts.push(`상태: ${c.status}`);
+    if (c.last_task)      parts.push(`마지막 작업: ${c.last_task}`);
+    if (c.next_action)    parts.push(`다음 액션: ${c.next_action}`);
     if (c.current_problems && c.current_problems !== '없음')
-      parts.push(`현재 문제: ${c.current_problems}`);
-    if (c.summary) parts.push(`요약: ${c.summary}`);
+                          parts.push(`현재 문제: ${c.current_problems}`);
+    if (c.summary)        parts.push(`요약: ${c.summary}`);
     if (Array.isArray(c.next_tasks) && c.next_tasks.length > 0)
       parts.push(`다음 작업:\n${c.next_tasks.map((t: string) => `  - ${t}`).join('\n')}`);
     return parts.join('\n') || '맥락 데이터 파싱 실패';
@@ -143,8 +150,19 @@ export async function GET(req: Request) {
   const action = searchParams.get('action');
 
   try {
+    // 사람 이해용 contexts (v1.1 재정의 — understanding, confidence_map 등)
     if (action === 'contexts') {
-      const data = await supabaseGet('contexts?order=updated_at.desc&limit=1');
+      const data = await supabaseGet(
+        'contexts?order=updated_at.desc&limit=1' +
+        '&select=id,person_id,device_id,understanding,confidence_map,' +
+        'knowledge_unit_ids,evolution,last_synthesized_at,updated_at'
+      );
+      return Response.json({ payload: data[0] || null });
+    }
+
+    // 개발 핸드오프 — dev_contexts (구 contexts 역할, v1.1 신규)
+    if (action === 'dev_contexts') {
+      const data = await supabaseGet('dev_contexts?order=updated_at.desc&limit=1');
       return Response.json({ payload: data[0] || null });
     }
 
@@ -174,11 +192,12 @@ export async function POST(req: Request) {
     const rawBody = await req.text();
     const body = JSON.parse(rawBody.replace(/^\uFEFF/, ''));
 
-    // ── update_context ─────────────────────────────────────────
+    // ── update_context → dev_contexts 패치 (하위 호환 유지) ───
+    // v1.1: Dashboard / Chrome Extension이 기존 action명 그대로 써도 동작
     if (action === 'update_context') {
       const { id, ...fields } = body;
       if (!id) return Response.json({ _error: 'id 필요', traceId }, { status: 200 });
-      const data = await supabasePatch('contexts', id, {
+      const data = await supabasePatch('dev_contexts', id, {
         ...fields,
         updated_at: new Date().toISOString(),
       });
@@ -200,7 +219,7 @@ export async function POST(req: Request) {
       }
 
       const [contextSummary, mindWorldSummary] = await Promise.all([
-        fetchContextSummary(),
+        fetchContextSummary(),   // dev_contexts 읽음 (v1.1)
         fetchMindWorldSummary(),
       ]);
 
@@ -262,7 +281,7 @@ ${mindWorldSummary}`;
         return Response.json({ _error: '대화 데이터 조회 실패', traceId }, { status: 200 });
       }
 
-      const currentContext = await fetchContextSummary();
+      const currentContext = await fetchContextSummary();  // dev_contexts 읽음 (v1.1)
 
       const summarizePrompt = `You are a JSON-only output machine. Do not write any text outside of the JSON object. No markdown. No explanation. No code fences. Just raw JSON.
 
@@ -304,7 +323,6 @@ ${allConversations}`;
       }
 
       const geminiData = await geminiRes.json();
-      // thinking 블록 제거 후 text parts만 수집
       const parts = geminiData.candidates?.[0]?.content?.parts || [];
       const rawText = parts
         .filter((p: { thought?: boolean; text?: string }) => !p.thought && typeof p.text === 'string')
@@ -313,21 +331,17 @@ ${allConversations}`;
 
       let parsed: Record<string, string> = {};
       try {
-        // 1차: ```json 블록 추출
         const fenceMatch = rawText.match(/```json\s*([\s\S]*?)```/);
         const candidate = fenceMatch ? fenceMatch[1] : rawText;
-        // 2차: { } 범위 추출 (가장 바깥 중괄호)
         const objMatch = candidate.match(/\{[\s\S]*\}/);
         if (!objMatch) throw new Error('JSON 객체 없음');
-        // 3차: 줄바꿈/제어문자 정리 후 파싱
         const cleaned = objMatch[0]
           .replace(/[\u0000-\u001F&&[^\n\r\t]]/g, ' ')
-          .replace(/,\s*([\]}])/g, '$1'); // trailing comma 제거
+          .replace(/,\s*([\]}])/g, '$1');
         parsed = JSON.parse(cleaned);
-      } catch (parseErr) {
-        // 4차 fallback: 정규식으로 필드별 직접 추출
+      } catch {
         const extract = (key: string) => {
-          const m = rawText.match(new RegExp(`"${key}"\s*:\s*"([^"]*)"`, 's'));
+          const m = rawText.match(new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`, 's'));
           return m ? m[1].trim() : '';
         };
         parsed = {
@@ -336,7 +350,6 @@ ${allConversations}`;
           next_action:      extract('next_action'),
           current_problems: extract('current_problems') || '없음',
         };
-        // 4차도 전부 비어있으면 에러
         if (!parsed.last_task && !parsed.summary && !parsed.next_action) {
           return Response.json({ _error: 'Gemini 응답 파싱 실패', raw: rawText.slice(0, 300), traceId }, { status: 200 });
         }
@@ -344,9 +357,9 @@ ${allConversations}`;
 
       return Response.json({
         summary: {
-          last_task: parsed.last_task || '',
-          summary: parsed.summary || '',
-          next_action: parsed.next_action || '',
+          last_task:        parsed.last_task || '',
+          summary:          parsed.summary || '',
+          next_action:      parsed.next_action || '',
           current_problems: parsed.current_problems || '없음',
         },
         traceId,
