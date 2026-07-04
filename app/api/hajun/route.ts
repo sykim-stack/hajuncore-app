@@ -259,36 +259,48 @@ ${mindWorldSummary}`;
     }
 
 // ── summarize_context (Gemini 2.5 Flash) ──────────────────
-    // v1.1 개선: dev_contexts + 최근 대화 + Knowledge Units 통합 입력
+    // v1.2: 마크다운 제거 + 전처리 + 필드별 한 줄 강제
     if (action === 'summarize_context') {
       if (!GEMINI_KEY) {
         return Response.json({ _error: 'GEMINI_API_KEY 환경변수 미설정', traceId }, { status: 200 });
       }
 
+      // ── 텍스트 정제 헬퍼 ──────────────────────────────────
+      function cleanText(text: string, maxLen = 200): string {
+        return (text || '')
+          .replace(/\*\*(.+?)\*\*/g, '$1')   // **bold** 제거
+          .replace(/#{1,6}\s/g, '')           // # 헤더 제거
+          .replace(/`{1,3}[^`]*`{1,3}/gs, '') // 코드블록 제거
+          .replace(/\n{3,}/g, '\n\n')         // 연속 줄바꿈 압축
+          .replace(/[\u0000-\u001F]/g, ' ')   // 제어문자 제거
+          .trim()
+          .slice(0, maxLen);
+      }
+
       // ── 1. dev_contexts 현재 상태 ─────────────────────────
-      let devContextBlock = '';
+      let devContextBlock = '개발 맥락 없음';
       try {
         const devData = await supabaseGet('dev_contexts?order=updated_at.desc&limit=1');
         if (devData && devData.length > 0) {
           const d = devData[0];
           const lines: string[] = [];
-          if (d.phase)            lines.push(`페이즈: ${d.phase}`);
-          if (d.status)           lines.push(`상태: ${d.status}`);
-          if (d.last_task)        lines.push(`마지막 작업: ${d.last_task}`);
-          if (d.next_action)      lines.push(`다음 액션: ${d.next_action}`);
+          if (d.phase)        lines.push(`페이즈: ${d.phase}`);
+          if (d.status)       lines.push(`상태: ${d.status}`);
+          if (d.last_task)    lines.push(`마지막 작업: ${cleanText(d.last_task, 100)}`);
+          if (d.next_action)  lines.push(`다음 액션: ${cleanText(d.next_action, 100)}`);
           if (d.current_problems && d.current_problems !== '없음')
-                                  lines.push(`현재 문제: ${d.current_problems}`);
-          if (d.summary)          lines.push(`기존 요약: ${d.summary}`);
+                              lines.push(`현재 문제: ${cleanText(d.current_problems, 100)}`);
+          if (d.summary)      lines.push(`기존 요약: ${cleanText(d.summary, 150)}`);
           if (Array.isArray(d.completed_tasks) && d.completed_tasks.length > 0)
-            lines.push(`완료 작업:\n${d.completed_tasks.map((t: string) => `  - ${t}`).join('\n')}`);
+            lines.push(`완료: ${d.completed_tasks.slice(0, 5).map((t: string) => cleanText(t, 60)).join(' / ')}`);
           if (Array.isArray(d.next_tasks) && d.next_tasks.length > 0)
-            lines.push(`예정 작업:\n${d.next_tasks.map((t: string) => `  - ${t}`).join('\n')}`);
+            lines.push(`예정: ${d.next_tasks.slice(0, 5).map((t: string) => cleanText(t, 60)).join(' / ')}`);
           devContextBlock = lines.join('\n');
         }
       } catch { devContextBlock = '개발 맥락 조회 실패'; }
 
-      // ── 2. 최근 대화 (최근 30건, knowledge_type 기준 분류) ─
-      let conversationBlock = '';
+      // ── 2. 최근 대화 (최근 30건, knowledge_type 분류) ─────
+      let conversationBlock = '대화 없음';
       try {
         const convData = await supabaseGet(
           'hajunai_conversations?order=created_at.desc&limit=30' +
@@ -298,7 +310,6 @@ ${mindWorldSummary}`;
           return Response.json({ _error: '저장된 대화가 없습니다', traceId }, { status: 200 });
         }
 
-        // knowledge_type별 분류
         const byType: Record<string, typeof convData> = {};
         for (const c of convData) {
           const t = c.knowledge_type || 'raw';
@@ -308,29 +319,32 @@ ${mindWorldSummary}`;
 
         const sections: string[] = [];
 
-        // raw (일반 대화) — 최근 순 그대로
+        // raw 대화 — 정제 후 한 줄씩
         if (byType['raw'] && byType['raw'].length > 0) {
           sections.push('[최근 대화]');
-          sections.push(
-            byType['raw']
-              .slice(0, 20)
-              .reverse()
-              .map((c: { created_at?: string; source_ai?: string; original_message?: string }) =>
-                `[${c.created_at?.slice(0, 10) || ''}][${c.source_ai || 'AI'}]\n${c.original_message || ''}`
-              )
-              .join('\n\n---\n\n')
-          );
+          const lines = byType['raw']
+            .slice(0, 15)
+            .reverse()
+            .map((c: { created_at?: string; source_ai?: string; original_message?: string; summary?: string }) => {
+              const date    = c.created_at?.slice(0, 10) || '';
+              const content = cleanText(c.summary || c.original_message || '', 120);
+              return `${date} | ${content}`;
+            });
+          sections.push(lines.join('\n'));
         }
 
-        // language / context / life / pattern — Knowledge Units
-        for (const type of ['language', 'context', 'life', 'pattern']) {
+        // Knowledge Units — summary만 추출
+        for (const type of ['language', 'context', 'life', 'pattern'] as const) {
           if (byType[type] && byType[type].length > 0) {
-            const label = { language: '언어 이해', context: '대화 맥락', life: '생활 패턴', pattern: '발견된 패턴' }[type];
-            sections.push(`\n[Knowledge — ${label}]`);
+            const label: Record<string, string> = {
+              language: '언어 이해', context: '대화 맥락',
+              life: '생활 패턴', pattern: '발견된 패턴'
+            };
+            sections.push(`[Knowledge - ${label[type]}]`);
             sections.push(
               byType[type]
                 .map((c: { summary?: string; keywords?: string[] }) =>
-                  `• ${c.summary || ''}${c.keywords?.length ? ` (${c.keywords.join(', ')})` : ''}`
+                  `• ${cleanText(c.summary || '', 100)}`
                 )
                 .join('\n')
             );
@@ -346,37 +360,32 @@ ${mindWorldSummary}`;
       const mindWorldSummary = await fetchMindWorldSummary();
 
       // ── 4. Gemini 구조화 프롬프트 ─────────────────────────
-      const summarizePrompt = `You are a JSON-only output machine. No markdown. No explanation. No code fences. Just raw JSON.
+      const summarizePrompt = `You are a JSON-only output machine.
+CRITICAL: Output ONLY a single valid JSON object. No markdown. No code fences. No explanation. No newlines inside string values.
 
-Output exactly this structure:
-{
-  "last_task": "...",
-  "summary": "...",
-  "next_action": "...",
-  "current_problems": "...",
-  "development_summary": "...",
-  "conversation_summary": "...",
-  "decisions": "...",
-  "risks": "..."
-}
+Output exactly this JSON structure with all 8 fields:
+{"last_task":"...","summary":"...","next_action":"...","current_problems":"...","development_summary":"...","conversation_summary":"...","decisions":"...","risks":"..."}
 
-Rules (한국어, 쌍따옴표 내 줄바꿈 금지):
-- last_task: 가장 최근 핵심 작업 (100자 이내, 한 줄)
-- summary: 프로젝트 전체 현재 상태 (300자 이내, 핵심만, 한 줄)
-- next_action: 지금 당장 할 것 (형식: "구현: 작업명 - 위치/방법")
-- current_problems: 현재 블로커나 문제점 (없으면 "없음")
-- development_summary: 개발 진행 상황 요약 (완료된 것 + 진행 중인 것, 200자 이내)
-- conversation_summary: 최근 대화에서 논의된 핵심 내용 (200자 이내)
-- decisions: 확정된 설계/구조 결정사항 (없으면 "없음", 200자 이내)
-- risks: 주의해야 할 사항이나 미결 의존성 (없으면 "없음", 100자 이내)
+STRICT RULES:
+1. Every value must be a single line string (NO newlines, NO line breaks inside values)
+2. Use comma(,) as separator between points, NOT newlines
+3. Korean only
+4. last_task: 최근 핵심 작업 (80자 이내)
+5. summary: 프로젝트 현재 상태 (200자 이내)
+6. next_action: 지금 당장 할 것 (예: "구현: CoreHub API - /api/corehub")
+7. current_problems: 현재 블로커 (없으면 정확히 "없음")
+8. development_summary: 개발 진행 상황 (완료+진행, 200자 이내)
+9. conversation_summary: 최근 논의 핵심 (150자 이내)
+10. decisions: 확정된 설계 결정 (없으면 정확히 "없음")
+11. risks: 주의사항 (없으면 정확히 "없음")
 
-=== 현재 개발 맥락 (dev_contexts) ===
+=== 개발 현황 (dev_contexts) ===
 ${devContextBlock}
 
 === 최근 대화 및 Knowledge ===
 ${conversationBlock}
 
-=== MindWorld / 씨앗 상태 ===
+=== MindWorld 씨앗 상태 ===
 ${mindWorldSummary}`;
 
       const geminiRes = await fetch(
@@ -407,34 +416,63 @@ ${mindWorldSummary}`;
         .map((p: { text: string }) => p.text)
         .join('');
 
+      // ── 파싱 4단계 방어 ───────────────────────────────────
+      const FIELDS = ['last_task','summary','next_action','current_problems',
+                      'development_summary','conversation_summary','decisions','risks'];
+
       let parsed: Record<string, string> = {};
+      let parseOk = false;
+
+      // 1단계: 직접 파싱
       try {
-        const fenceMatch = rawText.match(/```json\s*([\s\S]*?)```/);
-        const candidate  = fenceMatch ? fenceMatch[1] : rawText;
-        const objMatch   = candidate.match(/\{[\s\S]*\}/);
-        if (!objMatch) throw new Error('JSON 객체 없음');
-        const cleaned = objMatch[0]
-          .replace(/[\u0000-\u001F&&[^\n\r\t]]/g, ' ')
+        const cleaned = rawText
+          .replace(/[\u0000-\u001F&&[^\r\n\t]]/g, ' ')
           .replace(/,\s*([\]}])/g, '$1');
-        parsed = JSON.parse(cleaned);
-      } catch {
-        const extract = (key: string) => {
-          const m = rawText.match(new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`, 's'));
-          return m ? m[1].trim() : '';
-        };
-        parsed = {
-          last_task:            extract('last_task'),
-          summary:              extract('summary'),
-          next_action:          extract('next_action'),
-          current_problems:     extract('current_problems') || '없음',
-          development_summary:  extract('development_summary'),
-          conversation_summary: extract('conversation_summary'),
-          decisions:            extract('decisions') || '없음',
-          risks:                extract('risks') || '없음',
-        };
-        if (!parsed.last_task && !parsed.summary && !parsed.next_action) {
-          return Response.json({ _error: 'Gemini 응답 파싱 실패', raw: rawText.slice(0, 300), traceId }, { status: 200 });
+        const objMatch = cleaned.match(/\{[\s\S]*\}/);
+        if (objMatch) {
+          parsed = JSON.parse(objMatch[0]);
+          parseOk = FIELDS.some(f => parsed[f]);
         }
+      } catch { /* 2단계로 */ }
+
+      // 2단계: 줄바꿈 → 공백 치환 후 파싱
+      if (!parseOk) {
+        try {
+          const inlined = rawText
+            .replace(/("(?:[^"\\]|\\.)*")/g, (m) =>
+              m.replace(/\n/g, ' ').replace(/\r/g, '')
+            )
+            .replace(/,\s*([\]}])/g, '$1');
+          const objMatch = inlined.match(/\{[\s\S]*\}/);
+          if (objMatch) {
+            parsed = JSON.parse(objMatch[0]);
+            parseOk = FIELDS.some(f => parsed[f]);
+          }
+        } catch { /* 3단계로 */ }
+      }
+
+      // 3단계: 필드별 정규식 추출
+      if (!parseOk) {
+        const extract = (key: string) => {
+          const m = rawText.match(new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+          return m ? m[1].replace(/\\n/g, ' ').replace(/\\"/g, '"').trim() : '';
+        };
+        for (const f of FIELDS) parsed[f] = extract(f);
+        parseOk = FIELDS.some(f => parsed[f]);
+      }
+
+      // 4단계: 전부 실패
+      if (!parseOk) {
+        return Response.json({
+          _error: 'Gemini 응답 파싱 실패',
+          raw: rawText.slice(0, 500),
+          traceId
+        }, { status: 200 });
+      }
+
+      // 기본값 채우기
+      for (const f of ['current_problems','decisions','risks']) {
+        if (!parsed[f]) parsed[f] = '없음';
       }
 
       return Response.json({
