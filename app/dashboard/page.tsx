@@ -2,9 +2,10 @@
 import { useEffect, useState, useCallback } from 'react';
 import Sidebar from '@/components/Sidebar';
 
-type Context = {
+// dev_contexts 기반 타입 (구 contexts 역할)
+type DevContext = {
   id: string;
-  project_id?: string;
+  project_id: string;
   phase?: string;
   status?: string;
   health_score?: number;
@@ -20,18 +21,11 @@ type Context = {
   updated_at?: string;
 };
 
-const AI_PROJECTS = [
-  { label: 'Claude',     id: 'aaaaaaaa-0000-0000-0000-000000000001', color: '#58A6FF' },
-  { label: 'ChatGPT',    id: 'aaaaaaaa-0000-0000-0000-000000000002', color: '#3FB950' },
-  { label: 'Gemini',     id: 'aaaaaaaa-0000-0000-0000-000000000003', color: '#F78166' },
-  { label: 'Perplexity', id: 'aaaaaaaa-0000-0000-0000-000000000004', color: '#D2A8FF' },
-];
-
 const S: Record<string, React.CSSProperties> = {
   page: { display: 'flex', minHeight: '100vh', background: 'var(--bg)' },
   main: { flex: 1, padding: '32px 36px', overflowY: 'auto' },
   title: { fontSize: 22, fontWeight: 700, marginBottom: 4 },
-  sub: { fontSize: 12, color: 'var(--text2)', marginBottom: 16, fontFamily: 'JetBrains Mono, monospace' },
+  sub: { fontSize: 12, color: 'var(--text2)', marginBottom: 28, fontFamily: 'JetBrains Mono, monospace' },
   grid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 },
   card: { background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 16 },
   label: { fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' as const, letterSpacing: 1, marginBottom: 6, fontFamily: 'JetBrains Mono, monospace' },
@@ -47,8 +41,8 @@ function formatList(val: unknown): string {
   return String(val);
 }
 
-function buildPrompt(c: Context): string {
-  return `🦈 BRAINPOOL OS - HajunAI 맥락 주입 (v0.9)
+function buildPrompt(c: DevContext): string {
+  return `🦈 BRAINPOOL OS - HajunAI 맥락 주입 (v1.0)
 
 당신은 BRAINPOOL OS의 핵심 개발자입니다. 아래 맥락을 완벽히 이해하고 이어서 작업해주세요.
 
@@ -80,31 +74,28 @@ ${formatList(c.next_tasks)}
 }
 
 export default function Dashboard() {
-  const [selectedAI, setSelectedAI] = useState(AI_PROJECTS[0]);
-  const [ctx, setCtx] = useState<Context | null>(null);
+  const [ctx, setCtx] = useState<DevContext | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [copied, setCopied] = useState(false);
   const [msg, setMsg] = useState('');
 
+  // dev_contexts 로드 (구 contexts)
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await fetch('/api/hajun?action=contexts&project_id=' + selectedAI.id);
+    const res = await fetch('/api/hajun?action=dev_contexts');
     const json = await res.json();
     if (json.payload) {
       setCtx(json.payload);
       setPrompt(buildPrompt(json.payload));
-    } else {
-      setCtx(null);
-      setPrompt('');
     }
     setLoading(false);
-  }, [selectedAI]);
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  const update = (field: keyof Context, value: unknown) => {
+  const update = (field: keyof DevContext, value: unknown) => {
     setCtx(prev => {
       if (!prev) return prev;
       const updated = { ...prev, [field]: value };
@@ -113,10 +104,11 @@ export default function Dashboard() {
     });
   };
 
+  // update_dev_context action 사용
   const save = async () => {
     if (!ctx?.id) return;
     setSaving(true);
-    const res = await fetch('/api/hajun?action=update_context', {
+    const res = await fetch('/api/hajun?action=update_dev_context', {
       method: 'POST',
       body: JSON.stringify(ctx),
     });
@@ -132,103 +124,86 @@ export default function Dashboard() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  if (loading) return (
+    <div style={S.page}>
+      <Sidebar />
+      <main style={S.main}>
+        <div style={{ color: 'var(--text2)', fontSize: 13 }}>⏳ 로딩 중...</div>
+      </main>
+    </div>
+  );
+
+  if (!ctx) return (
+    <div style={S.page}>
+      <Sidebar />
+      <main style={S.main}>
+        <div style={{ color: 'var(--warn)', fontSize: 13 }}>⚠️ dev_contexts 데이터 없음 — Supabase 환경변수 확인</div>
+      </main>
+    </div>
+  );
+
   return (
     <div style={S.page}>
       <Sidebar />
       <main style={S.main}>
         <div style={S.title}>🎯 대시보드</div>
-        <div style={S.sub}>마지막 업데이트: {ctx?.updated_at ? new Date(ctx.updated_at).toLocaleString('ko-KR') : '-'}</div>
+        <div style={S.sub}>마지막 업데이트: {ctx.updated_at ? new Date(ctx.updated_at).toLocaleString('ko-KR') : '-'}</div>
 
-        {/* AI 탭 선택 */}
-        <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
-          {AI_PROJECTS.map(ai => (
-            <button
-              key={ai.id}
-              onClick={() => setSelectedAI(ai)}
-              style={{
-                padding: '6px 16px', borderRadius: 'var(--radius)', border: '1px solid',
-                borderColor: selectedAI.id === ai.id ? ai.color : 'var(--border)',
-                background: selectedAI.id === ai.id ? ai.color + '22' : 'var(--bg2)',
-                color: selectedAI.id === ai.id ? ai.color : 'var(--text2)',
-                fontWeight: selectedAI.id === ai.id ? 700 : 400,
-                fontSize: 12, cursor: 'pointer', fontFamily: 'JetBrains Mono, monospace',
-              }}
-            >
-              {ai.label}
-            </button>
-          ))}
+        <div style={S.grid}>
+          <div style={S.card}>
+            <div style={S.label}>페이즈</div>
+            <input style={S.input} value={ctx.phase || ''} onChange={e => update('phase', e.target.value)} />
+          </div>
+          <div style={S.card}>
+            <div style={S.label}>상태</div>
+            <input style={S.input} value={ctx.status || ''} onChange={e => update('status', e.target.value)} />
+          </div>
+          <div style={S.card}>
+            <div style={S.label}>진행 중인 작업</div>
+            <input style={S.input} value={ctx.last_task || ''} onChange={e => update('last_task', e.target.value)} />
+          </div>
+          <div style={S.card}>
+            <div style={S.label}>다음 액션</div>
+            <input style={S.input} value={ctx.next_action || ''} onChange={e => update('next_action', e.target.value)} />
+          </div>
+          <div style={{ ...S.card, gridColumn: '1 / -1' }}>
+            <div style={S.label}>현재 문제</div>
+            <input style={S.input} value={ctx.current_problems || ''} onChange={e => update('current_problems', e.target.value)} />
+          </div>
+          <div style={{ ...S.card, gridColumn: '1 / -1' }}>
+            <div style={S.label}>다음 작업 (줄바꿈으로 구분)</div>
+            <textarea style={{ ...S.textarea, minHeight: 80 }}
+              value={Array.isArray(ctx.next_tasks) ? ctx.next_tasks.join('\n') : (ctx.next_tasks || '')}
+              onChange={e => update('next_tasks', e.target.value.split('\n').filter(Boolean))}
+            />
+          </div>
+          <div style={{ ...S.card, gridColumn: '1 / -1' }}>
+            <div style={S.label}>완료된 작업 (줄바꿈으로 구분)</div>
+            <textarea style={{ ...S.textarea, minHeight: 80 }}
+              value={Array.isArray(ctx.completed_tasks) ? ctx.completed_tasks.join('\n') : (ctx.completed_tasks || '')}
+              onChange={e => update('completed_tasks', e.target.value.split('\n').filter(Boolean))}
+            />
+          </div>
         </div>
 
-        {loading && <div style={{ color: 'var(--text2)', fontSize: 13 }}>⏳ 로딩 중...</div>}
+        <div style={{ display: 'flex', gap: 10, marginBottom: 28, alignItems: 'center' }}>
+          <button style={{ ...S.btn, background: 'var(--accent)', color: '#0D1117' }} onClick={save} disabled={saving}>
+            {saving ? '⏳ 저장 중...' : '💾 Supabase 저장'}
+          </button>
+          {msg && <span style={{ fontSize: 12, color: msg.startsWith('✅') ? 'var(--accent2)' : 'var(--warn)' }}>{msg}</span>}
+        </div>
 
-        {!loading && !ctx && (
-          <div style={{ color: 'var(--text3)', fontSize: 13, padding: 20 }}>
-            {selectedAI.label} 맥락 없음 — 아직 저장된 대화가 없습니다.
+        <div style={S.card}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>📋 이어가기 프롬프트</div>
+            <button style={{ ...S.btn, background: copied ? 'var(--accent2)' : 'var(--bg3)', color: copied ? '#0D1117' : 'var(--accent)', border: '1px solid var(--accent)', padding: '6px 14px', fontSize: 12 }} onClick={copy}>
+              {copied ? '✅ 복사됨!' : '📋 복사'}
+            </button>
           </div>
-        )}
-
-        {!loading && ctx && (
-          <>
-            <div style={S.grid}>
-              <div style={S.card}>
-                <div style={S.label}>페이즈</div>
-                <input style={S.input} value={ctx.phase || ''} onChange={e => update('phase', e.target.value)} />
-              </div>
-              <div style={S.card}>
-                <div style={S.label}>상태</div>
-                <input style={S.input} value={ctx.status || ''} onChange={e => update('status', e.target.value)} />
-              </div>
-              <div style={S.card}>
-                <div style={S.label}>진행 중인 작업</div>
-                <input style={S.input} value={ctx.last_task || ''} onChange={e => update('last_task', e.target.value)} />
-              </div>
-              <div style={S.card}>
-                <div style={S.label}>다음 액션</div>
-                <input style={S.input} value={ctx.next_action || ''} onChange={e => update('next_action', e.target.value)} />
-              </div>
-              <div style={{ ...S.card, gridColumn: '1 / -1' }}>
-                <div style={S.label}>현재 문제</div>
-                <input style={S.input} value={ctx.current_problems || ''} onChange={e => update('current_problems', e.target.value)} />
-              </div>
-              <div style={{ ...S.card, gridColumn: '1 / -1' }}>
-                <div style={S.label}>다음 작업 (줄바꿈으로 구분)</div>
-                <textarea style={{ ...S.textarea, minHeight: 80 }}
-                  value={Array.isArray(ctx.next_tasks) ? ctx.next_tasks.join('\n') : (ctx.next_tasks || '')}
-                  onChange={e => update('next_tasks', e.target.value.split('\n').filter(Boolean))}
-                />
-              </div>
-              <div style={{ ...S.card, gridColumn: '1 / -1' }}>
-                <div style={S.label}>완료된 작업 (줄바꿈으로 구분)</div>
-                <textarea style={{ ...S.textarea, minHeight: 80 }}
-                  value={Array.isArray(ctx.completed_tasks) ? ctx.completed_tasks.join('\n') : (ctx.completed_tasks || '')}
-                  onChange={e => update('completed_tasks', e.target.value.split('\n').filter(Boolean))}
-                />
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: 10, marginBottom: 28, alignItems: 'center' }}>
-              <button style={{ ...S.btn, background: 'var(--accent)', color: '#0D1117' }} onClick={save} disabled={saving}>
-                {saving ? '⏳ 저장 중...' : '💾 Supabase 저장'}
-              </button>
-              {msg && <span style={{ fontSize: 12, color: msg.startsWith('✅') ? 'var(--accent2)' : 'var(--warn)' }}>{msg}</span>}
-            </div>
-
-            <div style={S.card}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>📋 이어가기 프롬프트</div>
-                <button style={{ ...S.btn, background: copied ? 'var(--accent2)' : 'var(--bg3)', color: copied ? '#0D1117' : 'var(--accent)', border: '1px solid var(--accent)', padding: '6px 14px', fontSize: 12 }} onClick={copy}>
-                  {copied ? '✅ 복사됨!' : '📋 복사'}
-                </button>
-              </div>
-              <div style={S.promptBox}>{prompt}</div>
-              <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 8 }}>Claude / ChatGPT 채팅창에 붙여넣으세요</div>
-            </div>
-          </>
-        )}
+          <div style={S.promptBox}>{prompt}</div>
+          <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 8 }}>Claude / ChatGPT 채팅창에 붙여넣으세요</div>
+        </div>
       </main>
     </div>
   );
 }
-
-
-

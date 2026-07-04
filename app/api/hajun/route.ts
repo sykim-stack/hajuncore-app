@@ -258,48 +258,126 @@ ${mindWorldSummary}`;
       return Response.json({ reply, observations, traceId });
     }
 
-    // ── summarize_context (Gemini 2.5 Flash) ──────────────────
+// ── summarize_context (Gemini 2.5 Flash) ──────────────────
+    // v1.1 개선: dev_contexts + 최근 대화 + Knowledge Units 통합 입력
     if (action === 'summarize_context') {
       if (!GEMINI_KEY) {
         return Response.json({ _error: 'GEMINI_API_KEY 환경변수 미설정', traceId }, { status: 200 });
       }
 
-      let allConversations = '';
+      // ── 1. dev_contexts 현재 상태 ─────────────────────────
+      let devContextBlock = '';
+      try {
+        const devData = await supabaseGet('dev_contexts?order=updated_at.desc&limit=1');
+        if (devData && devData.length > 0) {
+          const d = devData[0];
+          const lines: string[] = [];
+          if (d.phase)            lines.push(`페이즈: ${d.phase}`);
+          if (d.status)           lines.push(`상태: ${d.status}`);
+          if (d.last_task)        lines.push(`마지막 작업: ${d.last_task}`);
+          if (d.next_action)      lines.push(`다음 액션: ${d.next_action}`);
+          if (d.current_problems && d.current_problems !== '없음')
+                                  lines.push(`현재 문제: ${d.current_problems}`);
+          if (d.summary)          lines.push(`기존 요약: ${d.summary}`);
+          if (Array.isArray(d.completed_tasks) && d.completed_tasks.length > 0)
+            lines.push(`완료 작업:\n${d.completed_tasks.map((t: string) => `  - ${t}`).join('\n')}`);
+          if (Array.isArray(d.next_tasks) && d.next_tasks.length > 0)
+            lines.push(`예정 작업:\n${d.next_tasks.map((t: string) => `  - ${t}`).join('\n')}`);
+          devContextBlock = lines.join('\n');
+        }
+      } catch { devContextBlock = '개발 맥락 조회 실패'; }
+
+      // ── 2. 최근 대화 (최근 30건, knowledge_type 기준 분류) ─
+      let conversationBlock = '';
       try {
         const convData = await supabaseGet(
-          'hajunai_conversations?order=created_at.asc&select=original_message,source_ai,created_at'
+          'hajunai_conversations?order=created_at.desc&limit=30' +
+          '&select=original_message,source_ai,source_core,knowledge_type,summary,keywords,created_at'
         );
         if (!convData || convData.length === 0) {
           return Response.json({ _error: '저장된 대화가 없습니다', traceId }, { status: 200 });
         }
-        allConversations = convData
-          .map((c: { source_ai?: string; original_message?: string; created_at?: string }) =>
-            `[${c.created_at?.slice(0, 10) || ''}][${c.source_ai || 'AI'}]\n${c.original_message || ''}`
-          )
-          .join('\n\n---\n\n');
+
+        // knowledge_type별 분류
+        const byType: Record<string, typeof convData> = {};
+        for (const c of convData) {
+          const t = c.knowledge_type || 'raw';
+          if (!byType[t]) byType[t] = [];
+          byType[t].push(c);
+        }
+
+        const sections: string[] = [];
+
+        // raw (일반 대화) — 최근 순 그대로
+        if (byType['raw'] && byType['raw'].length > 0) {
+          sections.push('[최근 대화]');
+          sections.push(
+            byType['raw']
+              .slice(0, 20)
+              .reverse()
+              .map((c: { created_at?: string; source_ai?: string; original_message?: string }) =>
+                `[${c.created_at?.slice(0, 10) || ''}][${c.source_ai || 'AI'}]\n${c.original_message || ''}`
+              )
+              .join('\n\n---\n\n')
+          );
+        }
+
+        // language / context / life / pattern — Knowledge Units
+        for (const type of ['language', 'context', 'life', 'pattern']) {
+          if (byType[type] && byType[type].length > 0) {
+            const label = { language: '언어 이해', context: '대화 맥락', life: '생활 패턴', pattern: '발견된 패턴' }[type];
+            sections.push(`\n[Knowledge — ${label}]`);
+            sections.push(
+              byType[type]
+                .map((c: { summary?: string; keywords?: string[] }) =>
+                  `• ${c.summary || ''}${c.keywords?.length ? ` (${c.keywords.join(', ')})` : ''}`
+                )
+                .join('\n')
+            );
+          }
+        }
+
+        conversationBlock = sections.join('\n');
       } catch {
         return Response.json({ _error: '대화 데이터 조회 실패', traceId }, { status: 200 });
       }
 
-      const currentContext = await fetchContextSummary();  // dev_contexts 읽음 (v1.1)
+      // ── 3. MindWorld 현황 ──────────────────────────────────
+      const mindWorldSummary = await fetchMindWorldSummary();
 
-      const summarizePrompt = `You are a JSON-only output machine. Do not write any text outside of the JSON object. No markdown. No explanation. No code fences. Just raw JSON.
+      // ── 4. Gemini 구조화 프롬프트 ─────────────────────────
+      const summarizePrompt = `You are a JSON-only output machine. No markdown. No explanation. No code fences. Just raw JSON.
 
 Output exactly this structure:
-{"last_task":"...","summary":"...","next_action":"...","current_problems":"..."}
+{
+  "last_task": "...",
+  "summary": "...",
+  "next_action": "...",
+  "current_problems": "...",
+  "development_summary": "...",
+  "conversation_summary": "...",
+  "decisions": "...",
+  "risks": "..."
+}
 
-Rules:
-- last_task: 가장 최근 핵심 작업 (80자 이내, 한 줄)
-- summary: 전체 프로젝트 현재 상태 (150자 이내, 한 줄, 줄바꿈 없음)
-- next_action: 지금 당장 할 것 (한 줄, 예: "구현: CoreHub API - /api/corehub")
-- current_problems: 현재 문제점 (없으면 "없음")
-- 모든 값은 한국어, 쌍따옴표 내 줄바꿈 금지
+Rules (한국어, 쌍따옴표 내 줄바꿈 금지):
+- last_task: 가장 최근 핵심 작업 (100자 이내, 한 줄)
+- summary: 프로젝트 전체 현재 상태 (300자 이내, 핵심만, 한 줄)
+- next_action: 지금 당장 할 것 (형식: "구현: 작업명 - 위치/방법")
+- current_problems: 현재 블로커나 문제점 (없으면 "없음")
+- development_summary: 개발 진행 상황 요약 (완료된 것 + 진행 중인 것, 200자 이내)
+- conversation_summary: 최근 대화에서 논의된 핵심 내용 (200자 이내)
+- decisions: 확정된 설계/구조 결정사항 (없으면 "없음", 200자 이내)
+- risks: 주의해야 할 사항이나 미결 의존성 (없으면 "없음", 100자 이내)
 
-기존 맥락:
-${currentContext}
+=== 현재 개발 맥락 (dev_contexts) ===
+${devContextBlock}
 
-전체 대화 기록:
-${allConversations}`;
+=== 최근 대화 및 Knowledge ===
+${conversationBlock}
+
+=== MindWorld / 씨앗 상태 ===
+${mindWorldSummary}`;
 
       const geminiRes = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
@@ -310,7 +388,7 @@ ${allConversations}`;
             contents: [{ role: 'user', parts: [{ text: summarizePrompt }] }],
             generationConfig: {
               temperature: 0.1,
-              maxOutputTokens: 2048,
+              maxOutputTokens: 4096,
               responseMimeType: 'application/json',
             },
           }),
@@ -332,8 +410,8 @@ ${allConversations}`;
       let parsed: Record<string, string> = {};
       try {
         const fenceMatch = rawText.match(/```json\s*([\s\S]*?)```/);
-        const candidate = fenceMatch ? fenceMatch[1] : rawText;
-        const objMatch = candidate.match(/\{[\s\S]*\}/);
+        const candidate  = fenceMatch ? fenceMatch[1] : rawText;
+        const objMatch   = candidate.match(/\{[\s\S]*\}/);
         if (!objMatch) throw new Error('JSON 객체 없음');
         const cleaned = objMatch[0]
           .replace(/[\u0000-\u001F&&[^\n\r\t]]/g, ' ')
@@ -345,10 +423,14 @@ ${allConversations}`;
           return m ? m[1].trim() : '';
         };
         parsed = {
-          last_task:        extract('last_task'),
-          summary:          extract('summary'),
-          next_action:      extract('next_action'),
-          current_problems: extract('current_problems') || '없음',
+          last_task:            extract('last_task'),
+          summary:              extract('summary'),
+          next_action:          extract('next_action'),
+          current_problems:     extract('current_problems') || '없음',
+          development_summary:  extract('development_summary'),
+          conversation_summary: extract('conversation_summary'),
+          decisions:            extract('decisions') || '없음',
+          risks:                extract('risks') || '없음',
         };
         if (!parsed.last_task && !parsed.summary && !parsed.next_action) {
           return Response.json({ _error: 'Gemini 응답 파싱 실패', raw: rawText.slice(0, 300), traceId }, { status: 200 });
@@ -357,16 +439,20 @@ ${allConversations}`;
 
       return Response.json({
         summary: {
-          last_task:        parsed.last_task || '',
-          summary:          parsed.summary || '',
-          next_action:      parsed.next_action || '',
-          current_problems: parsed.current_problems || '없음',
+          last_task:            parsed.last_task            || '',
+          summary:              parsed.summary              || '',
+          next_action:          parsed.next_action          || '',
+          current_problems:     parsed.current_problems     || '없음',
+          development_summary:  parsed.development_summary  || '',
+          conversation_summary: parsed.conversation_summary || '',
+          decisions:            parsed.decisions            || '없음',
+          risks:                parsed.risks                || '없음',
         },
         traceId,
       });
     }
 
-    return Response.json({ _error: '알 수 없는 action', traceId }, { status: 200 });
+        return Response.json({ _error: '알 수 없는 action', traceId }, { status: 200 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return Response.json({ _error: msg, traceId }, { status: 500 });
