@@ -439,7 +439,7 @@ ${mindWorldSummary}`;
       if (!parseOk) {
         try {
           const inlined = rawText
-            .replace(/("(?:[^"\\]|\\.)*")/g, (m) =>
+            .replace(/("(?:[^"\\]|\\.)*")/g, (m: string) =>
               m.replace(/\n/g, ' ').replace(/\r/g, '')
             )
             .replace(/,\s*([\]}])/g, '$1');
