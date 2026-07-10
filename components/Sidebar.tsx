@@ -7,6 +7,7 @@ const NAV = [
   { href: '/dashboard', icon: '🎯', label: '대시보드' },
   { href: '/health',    icon: '🩺', label: '헬스' },
   { href: '/snapshots', icon: '📸', label: '스냅샷' },
+  { href: '/chat',      icon: '💬', label: '하준챗' },
 ];
 
 export default function Sidebar() {
