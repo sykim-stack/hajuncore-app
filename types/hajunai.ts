@@ -1,32 +1,30 @@
 // types/hajunai.ts
-// BRAINPOOL Schema Contract v1.0
-// 이 파일이 진실의 단일 출처(Single Source of Truth)입니다.
-// Gemini 응답 → summarize_context → Dashboard → API → Supabase
-// 전부 이 타입을 기준으로 합니다.
+// BRAINPOOL Schema Contract v1.1
+// Single Source of Truth
+//
+// v1.1 변경: KnowledgeUnit에 ADR-K04 메타데이터 추가
+//   (derived_at, derived_version, derived_by, source_message_ids)
 //
 // 새 필드 추가 시 체크리스트:
-//   1. DevContextSummary에 필드 추가
-//   2. DEV_CONTEXT_SUMMARY_FIELDS 배열에 추가
-//   3. Supabase dev_contexts 테이블에 컬럼 추가
-//   4. summarize_context Gemini 프롬프트에 필드 추가
-//   5. Dashboard에 표시 섹션 추가
+//   1. 이 파일에 타입 추가
+//   2. Supabase 테이블에 컬럼 추가
+//   3. 해당 API route에 반영
+//   4. Dashboard/UI에 표시 추가
 
 // ── Gemini summarize_context 반환 타입 ───────────────────────
 export type DevContextSummary = {
-  // 기존 4개 (dev_contexts 기존 컬럼)
-  last_task:            string;   // 최근 핵심 작업 (100자 이내)
-  summary:              string;   // 프로젝트 전체 현재 상태 (200자 이내)
-  next_action:          string;   // 지금 당장 할 것
-  current_problems:     string;   // 현재 블로커 (없으면 "없음")
-
-  // 신규 4개 (v1.1 — dev_contexts 컬럼 추가됨)
-  development_summary:  string;   // 개발 진행 상황 (완료+진행, 200자 이내)
-  conversation_summary: string;   // 최근 논의 핵심 (150자 이내)
-  decisions:            string;   // 확정된 설계 결정 (없으면 "없음")
-  risks:                string;   // 주의사항 (없으면 "없음")
+  // 기존 4개
+  last_task:            string;
+  summary:              string;
+  next_action:          string;
+  current_problems:     string;
+  // v1.1 신규 4개
+  development_summary:  string;
+  conversation_summary: string;
+  decisions:            string;
+  risks:                string;
 };
 
-// summarize_context API 응답 타입
 export type SummarizeContextResponse = {
   summary:  DevContextSummary;
   traceId:  string;
@@ -35,69 +33,77 @@ export type SummarizeContextResponse = {
 
 // ── dev_contexts 전체 행 타입 ─────────────────────────────────
 export type DevContext = {
-  id:                   string;
-  project_id:           string;
-
-  // 개발 상태
-  phase?:               string;
-  status?:              string;
-  health_score?:        number;
-
-  // 작업 관리
-  last_task?:           string;
-  next_action?:         string;
-  current_problems?:    string;
-  action_reasoning?:    string;
-  last_idea_summary?:   string;
-
-  // 요약 (Gemini 생성)
-  summary?:             string;
-  development_summary?: string;
-  conversation_summary?:string;
-  decisions?:           string;
-  risks?:               string;
-
-  // 아키텍처
-  architecture?:        string;
-  dependencies?:        string;
-  stack?:               string;
-  code_context?:        string;
-  key_files?:           string[];
-  next_tasks?:          string[];
-  completed_tasks?:     string[];
-  knowledge?:           string[];
-
-  user_id?:             string;
-  updated_at?:          string;
-  created_at?:          string;
+  id:                    string;
+  project_id:            string;
+  phase?:                string;
+  status?:               string;
+  health_score?:         number;
+  last_task?:            string;
+  next_action?:          string;
+  current_problems?:     string;
+  action_reasoning?:     string;
+  last_idea_summary?:    string;
+  summary?:              string;
+  development_summary?:  string;
+  conversation_summary?: string;
+  decisions?:            string;
+  risks?:                string;
+  architecture?:         string;
+  dependencies?:         string;
+  stack?:                string;
+  code_context?:         string;
+  key_files?:            string[];
+  next_tasks?:           string[];
+  completed_tasks?:      string[];
+  knowledge?:            string[];
+  user_id?:              string;
+  updated_at?:           string;
+  created_at?:           string;
 };
 
-// ── Supabase dev_contexts 필드 목록 ──────────────────────────
-// summarize_context 반환값을 PATCH할 때 이 배열의 키만 허용
+// ── PATCH 허용 키 목록 ────────────────────────────────────────
 export const DEV_CONTEXT_SUMMARY_FIELDS: (keyof DevContextSummary)[] = [
-  'last_task',
-  'summary',
-  'next_action',
-  'current_problems',
-  'development_summary',
-  'conversation_summary',
-  'decisions',
-  'risks',
+  'last_task', 'summary', 'next_action', 'current_problems',
+  'development_summary', 'conversation_summary', 'decisions', 'risks',
 ];
 
 // ── Knowledge Unit 타입 (hajunai_conversations) ───────────────
+// ADR-K04 메타데이터 포함 (v1.1)
 export type KnowledgeUnit = {
   id:               string;
+  project_id?:      string;
+
+  // 분류
   source_ai?:       string;
   source_core?:     'CoreRing' | 'CoreChat' | 'CoreNull' | 'HajunAI' | 'external' | null;
   knowledge_type?:  'language' | 'context' | 'life' | 'pattern' | 'raw' | null;
   person_id?:       string | null;
+
+  // 내용
   original_message: string;
   summary?:         string | null;
   keywords?:        string[] | null;
   connections?:     string[] | null;
-  confidence?:      number | null;
-  observed_at?:     string | null;
-  created_at?:      string;
+  confidence?:      number | null;   // 0.00 ~ 1.00
+
+  // 시간
+  observed_at?:     string | null;   // 실제 관찰 시점
+  created_at?:      string;          // DB 저장 시점
+
+  // ADR-K04 Derived Data 메타데이터
+  derived_at?:          string | null;   // Derived Data 생성 시점
+  derived_version?:     string | null;   // 알고리즘 버전 (예: "1.0")
+  derived_by?:          string | null;   // 생성 주체 (예: "CoreNull", "HajunAI")
+  source_message_ids?:  string[] | null; // 원본 Message ID 참조
+
   meta?:            Record<string, unknown> | null;
+};
+
+// ── Knowledge Unit 생성 시 ADR-K04 필수 메타데이터 ────────────
+// house_snapshots → Knowledge Unit 변환 시 반드시 포함
+export type DerivedDataMeta = {
+  derived_at:         string;   // new Date().toISOString()
+  derived_version:    string;   // 현재 변환 알고리즘 버전
+  derived_by:         string;   // 'CoreNull' | 'HajunAI' | ...
+  source_message_ids: string[]; // 원본 Message ID 목록 (재생성 가능성 확보)
 };

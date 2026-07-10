@@ -14,47 +14,47 @@ type Context = {
 };
 
 const S: Record<string, React.CSSProperties> = {
-  page: { display: 'flex', minHeight: '100vh', background: 'var(--bg)' },
-  main: { flex: 1, padding: '32px 36px', overflowY: 'auto' },
+  page:  { display: 'flex', minHeight: '100vh', background: 'var(--bg)' },
+  main:  { flex: 1, padding: 'var(--page-py) var(--page-px)', overflowY: 'auto', minWidth: 0 },
   title: { fontSize: 22, fontWeight: 700, marginBottom: 4 },
-  sub: { fontSize: 12, color: 'var(--text2)', marginBottom: 28, fontFamily: 'JetBrains Mono, monospace' },
-  card: { background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 20, marginBottom: 16 },
+  sub:   { fontSize: 12, color: 'var(--text2)', marginBottom: 28, fontFamily: 'JetBrains Mono, monospace' },
+  card:  { background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 20, marginBottom: 16 },
   label: { fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' as const, letterSpacing: 1, marginBottom: 8, fontFamily: 'JetBrains Mono, monospace' },
 };
 
 function ScoreRing({ score }: { score: number }) {
-  const r = 54;
-  const circ = 2 * Math.PI * r;
+  const r      = 54;
+  const circ   = 2 * Math.PI * r;
   const offset = circ - (score / 100) * circ;
-  const color = score >= 80 ? '#3FB950' : score >= 50 ? '#F0883E' : '#F78166';
-
+  const color  = score >= 80 ? '#3FB950' : score >= 50 ? '#F0883E' : '#F78166';
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 32, marginBottom: 24 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 24, marginBottom: 24, flexWrap: 'wrap' }}>
       <svg width={130} height={130} viewBox="0 0 130 130">
         <circle cx={65} cy={65} r={r} fill="none" stroke="var(--bg3)" strokeWidth={12} />
         <circle cx={65} cy={65} r={r} fill="none" stroke={color} strokeWidth={12}
           strokeDasharray={circ} strokeDashoffset={offset}
           strokeLinecap="round" transform="rotate(-90 65 65)"
-          style={{ transition: 'stroke-dashoffset 0.6s ease' }}
-        />
+          style={{ transition: 'stroke-dashoffset 0.6s ease' }} />
         <text x={65} y={60} textAnchor="middle" fill={color} fontSize={28} fontWeight={700} fontFamily="JetBrains Mono, monospace">{score}</text>
         <text x={65} y={78} textAnchor="middle" fill="var(--text3)" fontSize={11} fontFamily="Noto Sans KR, sans-serif">/ 100</text>
       </svg>
       <div>
         <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 4 }}>헬스 스코어</div>
-        <div style={{ fontSize: 28, fontWeight: 700, color, fontFamily: 'JetBrains Mono, monospace' }}>{score >= 80 ? '🟢 양호' : score >= 50 ? '🟡 주의' : '🔴 위험'}</div>
+        <div style={{ fontSize: 24, fontWeight: 700, color, fontFamily: 'JetBrains Mono, monospace' }}>
+          {score >= 80 ? '🟢 양호' : score >= 50 ? '🟡 주의' : '🔴 위험'}
+        </div>
       </div>
     </div>
   );
 }
 
 export default function Health() {
-  const [ctx, setCtx] = useState<Context | null>(null);
+  const [ctx, setCtx]     = useState<Context | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await fetch('/api/hajun?action=contexts');
+    const res  = await fetch('/api/hajun?action=dev_contexts');
     const json = await res.json();
     if (json.payload) setCtx(json.payload);
     setLoading(false);
@@ -63,11 +63,14 @@ export default function Health() {
   useEffect(() => { load(); }, [load]);
 
   if (loading) return (
-    <div style={S.page}><Sidebar /><main style={S.main}><div style={{ color: 'var(--text2)', fontSize: 13 }}>⏳ 로딩 중...</div></main></div>
+    <div style={S.page}><Sidebar />
+      <main style={S.main}><div style={{ color: 'var(--text2)', fontSize: 13, paddingTop: 48 }}>⏳ 로딩 중...</div></main>
+    </div>
   );
-
   if (!ctx) return (
-    <div style={S.page}><Sidebar /><main style={S.main}><div style={{ color: 'var(--warn)', fontSize: 13 }}>⚠️ 데이터 없음</div></main></div>
+    <div style={S.page}><Sidebar />
+      <main style={S.main}><div style={{ color: 'var(--warn)', fontSize: 13, paddingTop: 48 }}>⚠️ 데이터 없음</div></main>
+    </div>
   );
 
   const tasks = Array.isArray(ctx.next_tasks) ? ctx.next_tasks : [];
@@ -76,6 +79,7 @@ export default function Health() {
     <div style={S.page}>
       <Sidebar />
       <main style={S.main}>
+        <div className="mobile-header-space" />
         <div style={S.title}>🩺 헬스 모니터</div>
         <div style={S.sub}>페이즈: {ctx.phase} · 상태: {ctx.status}</div>
 
@@ -118,6 +122,13 @@ export default function Health() {
           fontSize: 12, fontFamily: 'Noto Sans KR, sans-serif',
         }}>🔄 새로고침</button>
       </main>
+
+      <style>{`
+        .mobile-header-space { height: 0; }
+        @media (max-width: 768px) {
+          .mobile-header-space { height: 48px !important; }
+        }
+      `}</style>
     </div>
   );
 }

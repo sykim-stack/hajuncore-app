@@ -15,12 +15,32 @@
   --text2: #8B949E;
   --text3: #484F58;
   --radius: 8px;
+
+  /* 반응형 패딩 */
+  --page-px: 36px;
+  --page-py: 32px;
 }
 
 * { box-sizing: border-box; }
+
 body {
   background: var(--bg);
   color: var(--text);
   font-family: 'Noto Sans KR', sans-serif;
   margin: 0;
+}
+
+/* ── 반응형 브레이크포인트 ── */
+@media (max-width: 768px) {
+  :root {
+    --page-px: 16px;
+    --page-py: 20px;
+  }
+}
+
+@media (max-width: 480px) {
+  :root {
+    --page-px: 12px;
+    --page-py: 16px;
+  }
 }

@@ -5,10 +5,9 @@ import type { DevContext, DevContextSummary } from '@/types/hajunai';
 
 const S: Record<string, React.CSSProperties> = {
   page:     { display: 'flex', minHeight: '100vh', background: 'var(--bg)' },
-  main:     { flex: 1, padding: '32px 36px', overflowY: 'auto' },
+  main:     { flex: 1, padding: 'var(--page-py) var(--page-px)', overflowY: 'auto', minWidth: 0 },
   title:    { fontSize: 22, fontWeight: 700, marginBottom: 4 },
-  sub:      { fontSize: 12, color: 'var(--text2)', marginBottom: 28, fontFamily: 'JetBrains Mono, monospace' },
-  grid:     { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 },
+  sub:      { fontSize: 12, color: 'var(--text2)', marginBottom: 24, fontFamily: 'JetBrains Mono, monospace' },
   card:     { background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 16 },
   infoCard: { background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 16, marginBottom: 12 },
   label:    { fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase' as const, letterSpacing: 1, marginBottom: 6, fontFamily: 'JetBrains Mono, monospace' },
@@ -17,7 +16,6 @@ const S: Record<string, React.CSSProperties> = {
   btn:      { padding: '10px 20px', borderRadius: 'var(--radius)', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 13, fontFamily: 'Noto Sans KR, sans-serif' },
   promptBox:{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 16, fontSize: 12, whiteSpace: 'pre-wrap' as const, fontFamily: 'JetBrains Mono, monospace', maxHeight: 320, overflowY: 'auto' as const },
   infoText: { fontSize: 13, color: 'var(--text)', lineHeight: 1.7 },
-  tag:      { display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontFamily: 'JetBrains Mono, monospace', marginRight: 4, marginBottom: 4 },
 };
 
 function formatList(val: unknown): string {
@@ -79,22 +77,19 @@ ${formatList(c.next_tasks)}
 }
 
 export default function Dashboard() {
-  const [ctx, setCtx]         = useState<DevContext | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving]   = useState(false);
+  const [ctx, setCtx]               = useState<DevContext | null>(null);
+  const [loading, setLoading]       = useState(true);
+  const [saving, setSaving]         = useState(false);
   const [summarizing, setSummarizing] = useState(false);
-  const [prompt, setPrompt]   = useState('');
-  const [copied, setCopied]   = useState(false);
-  const [msg, setMsg]         = useState('');
+  const [prompt, setPrompt]         = useState('');
+  const [copied, setCopied]         = useState(false);
+  const [msg, setMsg]               = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
     const res  = await fetch('/api/hajun?action=dev_contexts');
     const json = await res.json();
-    if (json.payload) {
-      setCtx(json.payload);
-      setPrompt(buildPrompt(json.payload));
-    }
+    if (json.payload) { setCtx(json.payload); setPrompt(buildPrompt(json.payload)); }
     setLoading(false);
   }, []);
 
@@ -112,17 +107,13 @@ export default function Dashboard() {
   const save = async () => {
     if (!ctx?.id) return;
     setSaving(true);
-    const res  = await fetch('/api/hajun?action=update_dev_context', {
-      method: 'POST',
-      body: JSON.stringify(ctx),
-    });
+    const res  = await fetch('/api/hajun?action=update_dev_context', { method: 'POST', body: JSON.stringify(ctx) });
     const json = await res.json();
     setSaving(false);
     setMsg(json._error ? `❌ ${json._error}` : '✅ 저장 완료');
     setTimeout(() => setMsg(''), 3000);
   };
 
-  // Gemini 요약 실행 → dev_contexts 자동 저장
   const summarize = async () => {
     if (!ctx?.id) return;
     setSummarizing(true);
@@ -131,18 +122,12 @@ export default function Dashboard() {
       const res  = await fetch('/api/hajun?action=summarize_context', { method: 'POST', body: '{}' });
       const json = await res.json();
       if (json._error) { setMsg(`❌ ${json._error}`); return; }
-
       const s = json.summary as DevContextSummary;
-
-      // Schema Contract — DEV_CONTEXT_SUMMARY_FIELDS 기준으로만 저장
       const patch = await fetch('/api/hajun?action=update_dev_context', {
-        method: 'POST',
-        body: JSON.stringify({ id: ctx.id, ...s }),
+        method: 'POST', body: JSON.stringify({ id: ctx.id, ...s }),
       });
       const patchJson = await patch.json();
       if (patchJson._error) { setMsg(`❌ 저장 실패: ${patchJson._error}`); return; }
-
-      // 로컬 상태 업데이트
       setCtx(prev => prev ? { ...prev, ...s } : prev);
       setMsg('✅ Gemini 요약 완료 & 저장됨');
     } catch (e) {
@@ -161,13 +146,13 @@ export default function Dashboard() {
 
   if (loading) return (
     <div style={S.page}><Sidebar />
-      <main style={S.main}><div style={{ color: 'var(--text2)', fontSize: 13 }}>⏳ 로딩 중...</div></main>
+      <main style={S.main}><div style={{ color: 'var(--text2)', fontSize: 13, paddingTop: 48 }}>⏳ 로딩 중...</div></main>
     </div>
   );
 
   if (!ctx) return (
     <div style={S.page}><Sidebar />
-      <main style={S.main}><div style={{ color: 'var(--warn)', fontSize: 13 }}>⚠️ dev_contexts 데이터 없음 — Supabase 환경변수 확인</div></main>
+      <main style={S.main}><div style={{ color: 'var(--warn)', fontSize: 13, paddingTop: 48 }}>⚠️ dev_contexts 데이터 없음</div></main>
     </div>
   );
 
@@ -175,16 +160,18 @@ export default function Dashboard() {
     <div style={S.page}>
       <Sidebar />
       <main style={S.main}>
+        {/* 모바일 상단 여백 (햄버거 버튼 공간) */}
+        <div style={{ height: 0 }} className="mobile-header-space" />
+
         <div style={S.title}>🎯 대시보드</div>
         <div style={S.sub}>마지막 업데이트: {ctx.updated_at ? new Date(ctx.updated_at).toLocaleString('ko-KR') : '-'}</div>
 
-        {/* ── Gemini 요약 섹션 ─────────────────────────── */}
+        {/* Gemini 요약 섹션 */}
         <div style={{ marginBottom: 24 }}>
           <InfoCard icon="📌" label="Development Summary"  content={ctx.development_summary  || ''} accent="var(--accent)" />
           <InfoCard icon="💬" label="Conversation Summary" content={ctx.conversation_summary || ''} accent="var(--accent2)" />
           <InfoCard icon="✅" label="Decisions"            content={ctx.decisions            || ''} accent="#3FB950" />
           <InfoCard icon="⚠️" label="Risks"               content={ctx.risks                || ''} accent="var(--warn)" />
-
           {!ctx.development_summary && (
             <div style={{ ...S.infoCard, borderLeft: '4px solid var(--text3)', color: 'var(--text3)', fontSize: 12 }}>
               Gemini 요약을 실행하면 개발 현황이 여기에 표시됩니다.
@@ -192,8 +179,8 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* ── 편집 섹션 ────────────────────────────────── */}
-        <div style={S.grid}>
+        {/* 편집 그리드 — 모바일 1컬럼 */}
+        <div className="dashboard-grid" style={{ marginBottom: 24 }}>
           <div style={S.card}>
             <div style={S.label}>페이즈</div>
             <input style={S.input} value={ctx.phase || ''} onChange={e => update('phase', e.target.value)} />
@@ -210,52 +197,40 @@ export default function Dashboard() {
             <div style={S.label}>다음 액션</div>
             <input style={S.input} value={ctx.next_action || ''} onChange={e => update('next_action', e.target.value)} />
           </div>
-          <div style={{ ...S.card, gridColumn: '1 / -1' }}>
+          <div style={{ ...S.card, gridColumn: 'span 2' }} className="full-width-card">
             <div style={S.label}>현재 문제</div>
             <input style={S.input} value={ctx.current_problems || ''} onChange={e => update('current_problems', e.target.value)} />
           </div>
-          <div style={{ ...S.card, gridColumn: '1 / -1' }}>
+          <div style={{ ...S.card, gridColumn: 'span 2' }} className="full-width-card">
             <div style={S.label}>다음 작업 (줄바꿈으로 구분)</div>
             <textarea style={{ ...S.textarea, minHeight: 80 }}
               value={Array.isArray(ctx.next_tasks) ? ctx.next_tasks.join('\n') : (ctx.next_tasks || '')}
-              onChange={e => update('next_tasks', e.target.value.split('\n').filter(Boolean))}
-            />
+              onChange={e => update('next_tasks', e.target.value.split('\n').filter(Boolean))} />
           </div>
-          <div style={{ ...S.card, gridColumn: '1 / -1' }}>
+          <div style={{ ...S.card, gridColumn: 'span 2' }} className="full-width-card">
             <div style={S.label}>완료된 작업 (줄바꿈으로 구분)</div>
             <textarea style={{ ...S.textarea, minHeight: 80 }}
               value={Array.isArray(ctx.completed_tasks) ? ctx.completed_tasks.join('\n') : (ctx.completed_tasks || '')}
-              onChange={e => update('completed_tasks', e.target.value.split('\n').filter(Boolean))}
-            />
+              onChange={e => update('completed_tasks', e.target.value.split('\n').filter(Boolean))} />
           </div>
         </div>
 
-        {/* ── 액션 버튼 ────────────────────────────────── */}
-        <div style={{ display: 'flex', gap: 10, marginBottom: 28, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button
-            style={{ ...S.btn, background: 'var(--accent)', color: '#0D1117' }}
-            onClick={save} disabled={saving}>
+        {/* 액션 버튼 */}
+        <div className="btn-row" style={{ marginBottom: 28 }}>
+          <button style={{ ...S.btn, background: 'var(--accent)', color: '#0D1117' }} onClick={save} disabled={saving}>
             {saving ? '⏳ 저장 중...' : '💾 Supabase 저장'}
           </button>
-          <button
-            style={{ ...S.btn, background: summarizing ? 'var(--bg3)' : 'var(--accent2)', color: summarizing ? 'var(--text2)' : '#0D1117' }}
-            onClick={summarize} disabled={summarizing}>
+          <button style={{ ...S.btn, background: summarizing ? 'var(--bg3)' : 'var(--accent2)', color: summarizing ? 'var(--text2)' : '#0D1117' }} onClick={summarize} disabled={summarizing}>
             {summarizing ? '⏳ 분석 중...' : '✨ Gemini 요약 실행'}
           </button>
-          {msg && (
-            <span style={{ fontSize: 12, color: msg.startsWith('✅') ? 'var(--accent2)' : msg.startsWith('⏳') ? 'var(--text2)' : 'var(--warn)' }}>
-              {msg}
-            </span>
-          )}
+          {msg && <span style={{ fontSize: 12, color: msg.startsWith('✅') ? 'var(--accent2)' : msg.startsWith('⏳') ? 'var(--text2)' : 'var(--warn)' }}>{msg}</span>}
         </div>
 
-        {/* ── 프롬프트 박스 ─────────────────────────────── */}
+        {/* 프롬프트 */}
         <div style={S.card}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
             <div style={{ fontWeight: 700, fontSize: 14 }}>📋 이어가기 프롬프트</div>
-            <button
-              style={{ ...S.btn, background: copied ? 'var(--accent2)' : 'var(--bg3)', color: copied ? '#0D1117' : 'var(--accent)', border: '1px solid var(--accent)', padding: '6px 14px', fontSize: 12 }}
-              onClick={copy}>
+            <button style={{ ...S.btn, background: copied ? 'var(--accent2)' : 'var(--bg3)', color: copied ? '#0D1117' : 'var(--accent)', border: '1px solid var(--accent)', padding: '6px 14px', fontSize: 12 }} onClick={copy}>
               {copied ? '✅ 복사됨!' : '📋 복사'}
             </button>
           </div>
@@ -263,6 +238,26 @@ export default function Dashboard() {
           <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 8 }}>Claude / ChatGPT 채팅창에 붙여넣으세요</div>
         </div>
       </main>
+
+      <style>{`
+        .dashboard-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+        }
+        .btn-row {
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          flex-wrap: wrap;
+        }
+        @media (max-width: 768px) {
+          .mobile-header-space { height: 48px !important; }
+          .dashboard-grid { grid-template-columns: 1fr !important; }
+          .full-width-card { grid-column: span 1 !important; }
+          .btn-row button { width: 100%; justify-content: center; }
+        }
+      `}</style>
     </div>
   );
 }
