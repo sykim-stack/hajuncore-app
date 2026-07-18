@@ -118,8 +118,7 @@ async function fetchOpportunities(ownerKey: string): Promise<{
       .map((o: { title?: string; description?: string; opportunity_type?: string }) =>
         `- ${o.title || o.description || '발견된 기회'} (${o.opportunity_type || 'opportunity'})`
       )
-      .join('
-');
+      .join('\n');
 
     return { text, ids };
   } catch {
