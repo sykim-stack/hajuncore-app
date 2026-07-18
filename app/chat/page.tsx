@@ -103,10 +103,22 @@ export default function ChatPage() {
   const [hasDraft, setHasDraft]   = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [panelOpen, setPanelOpen] = useState(false); // 모바일 패널 토글
+  const [ownerKey, setOwnerKey]   = useState('');    // Phase 1: device_id 기반
   const bottomRef    = useRef<HTMLDivElement>(null);
   const textareaRef  = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => { setMessages(loadMessages()); setHydrated(true); }, []);
+  useEffect(() => {
+    setMessages(loadMessages());
+    setHydrated(true);
+    // Phase 1: localStorage device_id → owner_key
+    // Identity Layer 완성 후 실제 owner_key로 교체
+    let deviceId = localStorage.getItem('device_id');
+    if (!deviceId) {
+      deviceId = 'device_' + crypto.randomUUID();
+      localStorage.setItem('device_id', deviceId);
+    }
+    setOwnerKey(deviceId);
+  }, []);
   useEffect(() => { if (hydrated) saveMessages(messages); }, [messages, hydrated]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
 
@@ -131,7 +143,7 @@ export default function ChatPage() {
       const res  = await fetch('/api/hajun?action=chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, history }),
+        body: JSON.stringify({ message: msg, history, owner_key: ownerKey }),
       });
       const json = await res.json();
       if (json._error) {

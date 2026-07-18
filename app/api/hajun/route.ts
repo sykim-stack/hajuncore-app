@@ -16,9 +16,62 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
 const GEMINI_KEY  = process.env.GEMINI_API_KEY!;
 const GROQ_KEY    = process.env.GROQ_API_KEY!;
 const HOUSE_ID    = '6341b872-4555-4fdc-8f1d-8009b2b1764f';
+const COREHUB_URL = process.env.COREHUB_URL || 'https://brainpool-corehub.vercel.app';
 
 function createTraceId() {
   return 'tr-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+}
+
+// ── Step 3: Snapshot 변환 헬퍼 ────────────────────────────────
+function buildSnapshotSummary(content: Record<string, unknown>): string {
+  const house   = (content?.house   || {}) as Record<string, string>;
+  const summary = (content?.summary || {}) as Record<string, number>;
+  const rooms   = (content?.rooms   || []) as Array<Record<string, unknown>>;
+  const parts: string[] = [];
+
+  if (house.title) parts.push(`${house.title} (${house.primary_language || ''})`);
+  if (summary.seed_rooms   > 0) parts.push(`씨앗방 ${summary.seed_rooms}개`);
+  if (summary.bloomed_seeds > 0) parts.push(`꽃 ${summary.bloomed_seeds}개`);
+  if (summary.total_fruits  > 0) parts.push(`열매 ${summary.total_fruits}개`);
+  if (summary.total_harvested > 0) parts.push(`수확 ${summary.total_harvested}개`);
+  parts.push(`메시지 ${summary.total_messages || 0}개`);
+
+  const seedRooms = rooms.filter(r => r.seed_mode);
+  if (seedRooms.length > 0)
+    parts.push(`씨앗: ${seedRooms.map(r => r.room_name).join(', ')}`);
+
+  return parts.join(' · ');
+}
+
+function buildSnapshotKeywords(content: Record<string, unknown>): string[] {
+  const house   = (content?.house   || {}) as Record<string, string>;
+  const summary = (content?.summary || {}) as Record<string, number>;
+  const rooms   = (content?.rooms   || []) as Array<Record<string, unknown>>;
+  const kw: string[] = ['life', 'CoreNull'];
+
+  if (house.primary_language) kw.push(`lang_${house.primary_language}`);
+  if (summary.seed_rooms   > 0) kw.push('seed_active');
+  if (summary.bloomed_seeds > 0) kw.push('bloomed');
+  if (summary.total_fruits  > 0) kw.push('fruit');
+  if (summary.total_harvested > 0) kw.push('harvested');
+  if (rooms.some((r: Record<string, unknown>) => r.visibility === 'public'))  kw.push('public_space');
+  if (rooms.some((r: Record<string, unknown>) => r.visibility === 'family'))  kw.push('family_space');
+  if ((summary.total_messages || 0) > 10) kw.push('high_activity');
+  else if ((summary.total_messages || 0) > 0) kw.push('low_activity');
+  else kw.push('inactive');
+
+  return kw;
+}
+
+function calcSnapshotConfidence(snapshot: Record<string, unknown>): number {
+  const summary = ((snapshot.content as Record<string, unknown>)?.summary || {}) as Record<string, number>;
+  const ids = (snapshot.source_message_ids as string[]) || [];
+  let conf = 0.55;
+  if ((summary.total_messages || 0) > 5) conf += 0.10;
+  if ((summary.seed_rooms     || 0) > 0) conf += 0.05;
+  if ((summary.total_fruits   || 0) > 0) conf += 0.05;
+  if (ids.length > 1)                    conf += 0.05;
+  return Math.min(conf, 0.90);
 }
 
 // ── MindWorld 최신 결과 ───────────────────────────────────────
@@ -39,6 +92,53 @@ async function fetchMindWorldSummary(): Promise<string> {
   } catch {
     return '씨앗 데이터 조회 실패';
   }
+}
+
+// ── CoreHub Opportunity 조회 (v1.2) ──────────────────────────
+// CoreHub Architecture v2.0: Publish된 Public Knowledge를 HajunAI가 소비
+async function fetchOpportunities(ownerKey: string): Promise<{
+  text: string;
+  ids: string[];
+}> {
+  if (!ownerKey) return { text: '', ids: [] };
+  try {
+    const res = await fetch(
+      `${COREHUB_URL}/api/corehub/opportunities?owner_key=${encodeURIComponent(ownerKey)}`,
+      { headers: { 'Content-Type': 'application/json' }, cache: 'no-store' }
+    );
+    if (!res.ok) return { text: '', ids: [] };
+    const json = await res.json();
+    const items = json.data || [];
+    if (items.length === 0) return { text: '', ids: [] };
+
+    // 우선순위 높은 것 3개만 사용
+    const top = items.slice(0, 3);
+    const ids = top.map((o: { id: string }) => o.id);
+    const text = top
+      .map((o: { title?: string; description?: string; opportunity_type?: string }) =>
+        `- ${o.title || o.description || '발견된 기회'} (${o.opportunity_type || 'opportunity'})`
+      )
+      .join('
+');
+
+    return { text, ids };
+  } catch {
+    return { text: '', ids: [] };
+  }
+}
+
+// ── Opportunity 소비 처리 ────────────────────────────────────
+async function consumeOpportunities(ids: string[], outcome = 'shown'): Promise<void> {
+  if (!ids.length) return;
+  try {
+    await Promise.all(ids.map(id =>
+      fetch(`${COREHUB_URL}/api/corehub/opportunities?id=${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ outcome }),
+      })
+    ));
+  } catch { /* 소비 실패해도 응답은 반환 */ }
 }
 
 // ── dev_contexts 최신 1건 (chat 시스템 프롬프트용) ───────────
@@ -70,6 +170,7 @@ async function saveConversation(payload: {
   original_message: string;
   summary: string;
   keywords: string[];
+  meta?: Record<string, unknown>;
 }) {
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/hajunai_conversations`, {
@@ -175,6 +276,74 @@ export async function GET(req: Request) {
       return Response.json({ payload: data });
     }
 
+    // Step 3: house_snapshot → Knowledge Unit 변환 트리거
+    if (action === 'sync_snapshot') {
+      const houseId = searchParams.get('house_id');
+      if (!houseId) return Response.json({ _error: 'house_id 필요' }, { status: 200 });
+
+      // 중복 방지: 최신 snapshot_id 확인
+      const snapshots = await supabaseGet(
+        `house_snapshots?house_id=eq.${houseId}&order=derived_at.desc&limit=1`
+      );
+      if (!snapshots || snapshots.length === 0) {
+        return Response.json({ _error: 'Snapshot 없음', traceId: createTraceId() }, { status: 200 });
+      }
+      const snapshot = snapshots[0];
+
+      // 이미 변환된 것 스킵
+      const existing = await supabaseGet(
+        `hajunai_conversations?meta->>snapshot_id=eq.${snapshot.id}&limit=1&select=id`
+      );
+      if (existing && existing.length > 0) {
+        return Response.json({ skipped: true, reason: '이미 변환됨', traceId: createTraceId() }, { status: 200 });
+      }
+
+      // Knowledge Unit 변환
+      const summary    = buildSnapshotSummary(snapshot.content);
+      const keywords   = buildSnapshotKeywords(snapshot.content);
+      const confidence = calcSnapshotConfidence(snapshot);
+
+      const knowledgeUnit = {
+        source_ai:    'CoreNull',
+        source_core:  'CoreNull',
+        knowledge_type: 'life',
+        original_message: JSON.stringify(snapshot.content).slice(0, 2000),
+        summary,
+        keywords,
+        confidence,
+        observed_at:  snapshot.content?.last_activity || snapshot.derived_at,
+        derived_at:   snapshot.derived_at,
+        derived_version: String(snapshot.derived_version),
+        derived_by:   snapshot.derived_by || 'CoreNull',
+        source_message_ids: snapshot.source_message_ids || [],
+        meta: {
+          snapshot_id:   snapshot.id,
+          house_id:      snapshot.house_id,
+          snapshot_type: snapshot.snapshot_type,
+          house_title:   snapshot.content?.house?.title || '',
+        },
+      };
+
+      const res = await fetch(\`\${SUPABASE_URL}/rest/v1/hajunai_conversations\`, {
+        method: 'POST',
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: \`Bearer \${SUPABASE_KEY}\`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify(knowledgeUnit),
+      });
+
+      if (!res.ok) {
+        const err = await res.text();
+        return Response.json({ _error: \`저장 실패: \${err}\`, traceId: createTraceId() }, { status: 200 });
+      }
+
+      const saved = await res.json();
+      return Response.json({ id: saved[0]?.id, traceId: createTraceId() }, { status: 200 });
+    }
+
     return Response.json({ _error: '알 수 없는 action' }, { status: 200 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -206,9 +375,10 @@ export async function POST(req: Request) {
 
     // ── chat (Groq) ────────────────────────────────────────────
     if (action === 'chat') {
-      const { message, history = [] } = body as {
+      const { message, history = [], owner_key = '' } = body as {
         message: string;
         history: Array<{ role: string; content: string }>;
+        owner_key?: string;  // device_id 기반, Identity Layer 완성 후 교체
       };
 
       if (!message || typeof message !== 'string' || message.trim() === '') {
@@ -218,10 +388,17 @@ export async function POST(req: Request) {
         return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
       }
 
-      const [contextSummary, mindWorldSummary] = await Promise.all([
-        fetchContextSummary(),   // dev_contexts 읽음 (v1.1)
+      // CoreHub Architecture v2.0: Opportunity + 개발 맥락 + MindWorld 병렬 조회
+      const [contextSummary, mindWorldSummary, opportunities] = await Promise.all([
+        fetchContextSummary(),
         fetchMindWorldSummary(),
+        fetchOpportunities(owner_key),
       ]);
+
+      // Opportunity 섹션 — 있을 때만 프롬프트에 포함
+      const opportunitySection = opportunities.text
+        ? `\n발견된 기회 (CoreHub Publish):\n${opportunities.text}\n이 기회들은 강요하지 말고, 대화 흐름에서 자연스럽게 언급할 것.`
+        : '';
 
       const systemPrompt = `당신은 HajunAI입니다. BRAINPOOL 프로젝트의 개인 전략 비서입니다.
 질문에 단순히 답하는 AI가 아니라, 프로젝트와 삶의 흐름을 이해하고
@@ -233,7 +410,7 @@ export async function POST(req: Request) {
 - 한국어로만 답하세요.
 - 제안은 하되 강요하지 않습니다. 사용자 대신 결정하지 않습니다.
 - 필요하다고 판단되면 답변 끝에 "관찰:" 섹션을 추가하세요.
-  형식: 관찰:\n- 항목1\n- 항목2
+  형식: 관찰:\n- 항목1\n- 항목2${opportunitySection}
 
 현재 개발 맥락:
 ${contextSummary}
@@ -248,11 +425,26 @@ ${mindWorldSummary}`;
 
       const { reply, observations } = parseReply(groqResult.text || '');
 
+      // Opportunity 소비 처리 (응답 후 비동기 — 응답 속도에 영향 없음)
+      if (opportunities.ids.length > 0) {
+        consumeOpportunities(opportunities.ids, 'shown');
+      }
+
+      // Phase 5: Trace — opportunity 사용 기록을 meta에 저장
+      const chatMeta = opportunities.ids.length > 0
+        ? {
+            opportunity_ids: opportunities.ids,
+            used_at: new Date().toISOString(),
+            trace_id: traceId,
+          }
+        : undefined;
+
       saveConversation({
         source_ai: 'HajunAI',
         original_message: `[사용자] ${message}\n[HajunAI] ${reply}`,
         summary: reply.slice(0, 100),
         keywords: ['chat', 'hajunai'],
+        ...(chatMeta && { meta: chatMeta }),
       });
 
       return Response.json({ reply, observations, traceId });
