@@ -323,11 +323,11 @@ export async function GET(req: Request) {
         },
       };
 
-      const res = await fetch(\`\${SUPABASE_URL}/rest/v1/hajunai_conversations\`, {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/hajunai_conversations`, {
         method: 'POST',
         headers: {
           apikey: SUPABASE_KEY,
-          Authorization: \`Bearer \${SUPABASE_KEY}\`,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
           'Content-Type': 'application/json',
           Prefer: 'return=representation',
         },
@@ -336,7 +336,7 @@ export async function GET(req: Request) {
 
       if (!res.ok) {
         const err = await res.text();
-        return Response.json({ _error: \`저장 실패: \${err}\`, traceId: createTraceId() }, { status: 200 });
+        return Response.json({ _error: `저장 실패: ${err}`, traceId: createTraceId() }, { status: 200 });
       }
 
       const saved = await res.json();
