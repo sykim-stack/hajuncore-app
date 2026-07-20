@@ -252,12 +252,6 @@ export async function GET(req: Request) {
   try {
     // 사람 이해용 contexts (v1.1 재정의 — understanding, confidence_map 등)
     if (action === 'contexts') {
-<<<<<<< HEAD
-  const projectId = searchParams.get('project_id') || 'aaaaaaaa-0000-0000-0000-000000000001';
-  const data = await supabaseGet('contexts?project_id=eq.' + projectId + '&order=updated_at.desc&limit=1');
-  return Response.json({ payload: data[0] || null });
-  }
-=======
       const data = await supabaseGet(
         'contexts?order=updated_at.desc&limit=1' +
         '&select=id,person_id,device_id,understanding,confidence_map,' +
@@ -272,7 +266,6 @@ export async function GET(req: Request) {
       return Response.json({ payload: data[0] || null });
     }
 
->>>>>>> origin/main
     if (action === 'snapshots') {
       const limit = searchParams.get('limit') || '20';
       const aiFilter = searchParams.get('ai');
