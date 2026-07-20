@@ -343,6 +343,82 @@ export async function GET(req: Request) {
       return Response.json({ id: saved[0]?.id, traceId: createTraceId() }, { status: 200 });
     }
 
+    // ── context_package: 세션 시작 시 완전한 맥락 패키지 ────
+    // docs(철학) + dev_contexts(현황) + Knowledge Units(패턴)
+    if (action === 'context_package') {
+      const agent = searchParams.get('agent') || 'claude2';
+      const DOCS_URL = `https://hajuncore-app.vercel.app/api/docs?agent=${agent}`;
+
+      const [docsRes, devCtxData, knowledgeData] = await Promise.all([
+        // 1. 철학 문서 (brainpool-os GitHub)
+        fetch(DOCS_URL, { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+        // 2. 개발 현황 (dev_contexts)
+        supabaseGet('dev_contexts?order=updated_at.desc&limit=1'),
+        // 3. 최근 Knowledge Units (life/pattern 위주)
+        supabaseGet(
+          'hajunai_conversations?order=created_at.desc&limit=10' +
+          '&select=summary,keywords,knowledge_type,source_core,confidence,created_at' +
+          '&knowledge_type=neq.raw'
+        ),
+      ]);
+
+      const devCtx = devCtxData?.[0] || null;
+
+      // 주입용 텍스트 조합
+      const constitutionText = docsRes?.docs?.['Master_Prompt_v2.0'] || '';
+      const agentsText       = docsRes?.docs?.['Agents_Directive'] || '';
+
+      const devCtxText = devCtx ? [
+        devCtx.phase       ? `페이즈: ${devCtx.phase}` : '',
+        devCtx.last_task   ? `마지막 작업: ${devCtx.last_task}` : '',
+        devCtx.next_action ? `다음 액션: ${devCtx.next_action}` : '',
+        devCtx.current_problems && devCtx.current_problems !== '없음'
+          ? `현재 문제: ${devCtx.current_problems}` : '',
+        devCtx.development_summary  ? `개발 현황: ${devCtx.development_summary}` : '',
+        devCtx.conversation_summary ? `최근 논의: ${devCtx.conversation_summary}` : '',
+        devCtx.decisions && devCtx.decisions !== '없음'
+          ? `확정 결정: ${devCtx.decisions}` : '',
+      ].filter(Boolean).join('
+') : '개발 맥락 없음';
+
+      const knowledgeText = Array.isArray(knowledgeData) && knowledgeData.length > 0
+        ? knowledgeData
+            .map((k: { knowledge_type?: string; summary?: string; keywords?: string[]; confidence?: number }) =>
+              `[${k.knowledge_type}] ${k.summary || ''} ${k.keywords?.length ? `(${k.keywords.slice(0,3).join(', ')})` : ''}`
+            )
+            .join('
+')
+        : '축적된 Knowledge 없음';
+
+      // Claude에게 주입할 통합 프롬프트
+      const injectionPrompt = `당신은 BRAINPOOL OS의 클로2 (HajunAI 담당) 에이전트입니다.
+
+=== CONSTITUTION (불변의 원칙) ===
+${constitutionText.slice(0, 1500)}
+
+=== 에이전트 역할 ===
+${agentsText.slice(0, 500)}
+
+=== 현재 개발 현황 ===
+${devCtxText}
+
+=== 축적된 Knowledge ===
+${knowledgeText}
+
+위 맥락을 완전히 이해하고 BRAINPOOL 철학에 따라 작업을 이어가세요.`;
+
+      return Response.json({
+        agent,
+        injection_prompt: injectionPrompt,
+        raw: {
+          constitution: constitutionText.slice(0, 500) + '...',
+          dev_ctx:      devCtx,
+          knowledge_count: Array.isArray(knowledgeData) ? knowledgeData.length : 0,
+        },
+        fetched_at: new Date().toISOString(),
+      });
+    }
+
     return Response.json({ _error: '알 수 없는 action' }, { status: 200 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
