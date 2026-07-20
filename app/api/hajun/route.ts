@@ -344,25 +344,46 @@ export async function GET(req: Request) {
     }
 
     // ── context_package: 세션 시작 시 완전한 맥락 패키지 ────
-    // docs(철학) + dev_contexts(현황) + Knowledge Units(패턴)
-    if (action === 'context_package') {
-      const agent = searchParams.get('agent') || 'claude2';
-      const DOCS_URL = `https://hajuncore-app.vercel.app/api/docs?agent=${agent}`;
+    // app/api/hajun/route.ts 수정 제안
 
-      const [docsRes, devCtxData, knowledgeData] = await Promise.all([
-        // 1. 철학 문서 (brainpool-os GitHub)
-        fetch(DOCS_URL, { cache: 'no-store' }).then(r => r.json()).catch(() => null),
-        // 2. 개발 현황 (dev_contexts)
-        supabaseGet('dev_contexts?order=updated_at.desc&limit=1'),
-        // 3. 최근 Knowledge Units (life/pattern 위주)
-        supabaseGet(
-          'hajunai_conversations?order=created_at.desc&limit=10' +
-          '&select=summary,keywords,knowledge_type,source_core,confidence,created_at' +
-          '&knowledge_type=neq.raw'
-        ),
-      ]);
+case 'context_package':
+  // 1. DB에서 기본 현황 가져오기
+  const { data: devCtx } = await supabase
+    .from('dev_contexts')
+    .select('*')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .single();
 
-      const devCtx = devCtxData?.[0] || null;
+  // 2. GitHub에서 Manus PM이 작성한 최신 요약 가져오기 (추가)
+  let manusSummary = "";
+  try {
+    const summaryRes = await fetch('https://raw.githubusercontent.com/sykim-stack/brainpool-os/main/doc/status/DEV_CONTEXT_SUMMARY.md' );
+    if (summaryRes.ok) manusSummary = await summaryRes.text();
+  } catch (e) {
+    console.error("Manus Summary Fetch Failed", e);
+  }
+
+  // 3. 지시서(Master Prompt 등)와 요약을 결합하여 최종 프롬프트 생성
+     const injectionPrompt = `당신은 BRAINPOOL OS의 클로2 (HajunAI 담당) 에이전트입니다.
+  
+      === CONSTITUTION (최상위 헌법) ===
+      ${/* 기존 Master Prompt 로직 */}
+
+      === CURRENT DEV CONTEXT (최신 개발 현황) ===
+      ${manusSummary || devCtx?.summary || "현황 로드 실패"}
+
+      위 맥락을 완전히 이해하고 작업을 이어가세요.`;
+
+        return Response.json({
+          agent: "claude2",
+          injection_prompt: injectionPrompt,
+          raw: {
+            dev_ctx: { ...devCtx, summary: manusSummary || devCtx?.summary },
+            knowledge_count: knowledgeCount
+          }
+        });
+
 
       // 주입용 텍스트 조합
       const constitutionText = docsRes?.docs?.['Master_Prompt_v2.0'] || '';
