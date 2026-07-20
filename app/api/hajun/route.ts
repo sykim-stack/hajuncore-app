@@ -171,9 +171,10 @@ export async function GET(req: Request) {
 
   try {
     if (action === 'contexts') {
-      const data = await supabaseGet('contexts?order=updated_at.desc&limit=1');
-      return Response.json({ payload: data[0] || null });
-    }
+  const projectId = searchParams.get('project_id') || 'aaaaaaaa-0000-0000-0000-000000000001';
+  const data = await supabaseGet('contexts?project_id=eq.' + projectId + '&order=updated_at.desc&limit=1');
+  return Response.json({ payload: data[0] || null });
+  }
     if (action === 'snapshots') {
       const limit = searchParams.get('limit') || '20';
       const data = await supabaseGet('hajunai_conversations?order=created_at.desc&limit=' + limit);
