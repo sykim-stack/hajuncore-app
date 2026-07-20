@@ -386,7 +386,7 @@ export async function GET(req: Request) {
               `[${k.knowledge_type}] ${k.summary || ''} ${k.keywords?.length ? `(${k.keywords.slice(0,3).join(', ')})` : ''}`
             )
             .join('\n')
-
+        : '축적된 Knowledge 없음';
       // Claude에게 주입할 통합 프롬프트
       const injectionPrompt = [
         "당신은 BRAINPOOL OS의 클로2 (HajunAI 담당) 에이전트입니다.",
