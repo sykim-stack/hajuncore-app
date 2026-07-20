@@ -388,21 +388,23 @@ export async function GET(req: Request) {
             .join('\n')
 
       // Claude에게 주입할 통합 프롬프트
-      const injectionPrompt = `당신은 BRAINPOOL OS의 클로2 (HajunAI 담당) 에이전트입니다.
-
-=== CONSTITUTION (불변의 원칙) ===
-${constitutionText.slice(0, 1500)}
-
-=== 에이전트 역할 ===
-${agentsText.slice(0, 500)}
-
-=== 현재 개발 현황 ===
-${devCtxText}
-
-=== 축적된 Knowledge ===
-${knowledgeText}
-
-위 맥락을 완전히 이해하고 BRAINPOOL 철학에 따라 작업을 이어가세요.`;
+      const injectionPrompt = [
+        "당신은 BRAINPOOL OS의 클로2 (HajunAI 담당) 에이전트입니다.",
+        "",
+        "=== CONSTITUTION (불변의 원칙) ===",
+        constitutionText.slice(0, 1500),
+        "",
+        "=== 에이전트 역할 ===",
+        agentsText.slice(0, 500),
+        "",
+        "=== 현재 개발 현황 ===",
+        devCtxText,
+        "",
+        "=== 축적된 Knowledge ===",
+        knowledgeText,
+        "",
+        "위 맥락을 완전히 이해하고 BRAINPOOL 철학에 따라 작업을 이어가세요.",
+      ].join("\n");
 
       return Response.json({
         agent,
