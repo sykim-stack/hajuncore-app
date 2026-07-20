@@ -378,17 +378,14 @@ export async function GET(req: Request) {
         devCtx.conversation_summary ? `최근 논의: ${devCtx.conversation_summary}` : '',
         devCtx.decisions && devCtx.decisions !== '없음'
           ? `확정 결정: ${devCtx.decisions}` : '',
-      ].filter(Boolean).join('
-') : '개발 맥락 없음';
+      ].filter(Boolean).join('\n') : '개발 맥락 없음';
 
       const knowledgeText = Array.isArray(knowledgeData) && knowledgeData.length > 0
         ? knowledgeData
             .map((k: { knowledge_type?: string; summary?: string; keywords?: string[]; confidence?: number }) =>
               `[${k.knowledge_type}] ${k.summary || ''} ${k.keywords?.length ? `(${k.keywords.slice(0,3).join(', ')})` : ''}`
             )
-            .join('
-')
-        : '축적된 Knowledge 없음';
+            .join('\n')
 
       // Claude에게 주입할 통합 프롬프트
       const injectionPrompt = `당신은 BRAINPOOL OS의 클로2 (HajunAI 담당) 에이전트입니다.
