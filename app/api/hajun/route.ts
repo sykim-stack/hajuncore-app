@@ -1,6 +1,6 @@
 // app/api/hajun/route.ts
 // BRAINPOOL 계약: throw 금지, _error 필드 사용, 200/500만
-// action: contexts | dev_contexts | snapshots | update_context | chat | summarize_context
+// action: contexts | dev_contexts | snapshots | update_context | chat | summarize_context | context_package
 // 채팅: Groq (llama-3.3-70b-versatile) / 요약: Gemini 2.5 Flash
 //
 // v1.1 변경사항:
@@ -8,6 +8,10 @@
 // - GET  dev_contexts  → 개발 핸드오프 (구 contexts 역할, 신규)
 // - POST update_context → dev_contexts 패치로 라우팅 (하위 호환 유지)
 // - fetchContextSummary() → dev_contexts 읽도록 변경
+//
+// v1.2 변경사항:
+// - context_package → /api/docs?agent=claude2 에서 plain text로 받은 문서를
+//   그대로 주입하고, dev_contexts의 last_task/current_problems/next_action 만 포함
 
 import { supabaseGet, supabasePatch } from '@/lib/supabase';
 
@@ -344,98 +348,43 @@ export async function GET(req: Request) {
     }
 
     // ── context_package: 세션 시작 시 완전한 맥락 패키지 ────
-    // app/api/hajun/route.ts 수정 제안
+    // 변경: /api/docs?agent=claude2 에서 plain text로 받아 주입
+    if (action === 'context_package') {
+      const agent = searchParams.get('agent') || 'claude2';
+      const DOCS_URL = `https://hajuncore-app.vercel.app/api/docs?agent=${agent}`;
 
-case 'context_package':
-  // 1. DB에서 기본 현황 가져오기
-  const { data: devCtx } = await supabase
-    .from('dev_contexts')
-    .select('*')
-    .order('updated_at', { ascending: false })
-    .limit(1)
-    .single();
+      const [docsContent, devCtxData, knowledgeData] = await Promise.all([
+        // 1. GitHub 최신 지시서 + DEV_CONTEXT_SUMMARY (실시간 fetch, plain text)
+        fetch(DOCS_URL, { cache: 'no-store' })
+          .then(r => r.text())
+          .catch(() => "문서 로드 실패"),
+        // 2. DB 개발 현황
+        supabaseGet('dev_contexts?order=updated_at.desc&limit=1'),
+        // 3. 최근 Knowledge Units (raw 제외)
+        supabaseGet('hajunai_conversations?order=created_at.desc&limit=10&knowledge_type=neq.raw'),
+      ]);
 
-  // 2. GitHub에서 Manus PM이 작성한 최신 요약 가져오기 (추가)
-  let manusSummary = "";
-  try {
-    const summaryRes = await fetch('https://raw.githubusercontent.com/sykim-stack/brainpool-os/main/doc/status/DEV_CONTEXT_SUMMARY.md' );
-    if (summaryRes.ok) manusSummary = await summaryRes.text();
-  } catch (e) {
-    console.error("Manus Summary Fetch Failed", e);
-  }
+      const devCtx = devCtxData?.[0] || {};
 
-  // 3. 지시서(Master Prompt 등)와 요약을 결합하여 최종 프롬프트 생성
-     const injectionPrompt = `당신은 BRAINPOOL OS의 클로2 (HajunAI 담당) 에이전트입니다.
-  
-      === CONSTITUTION (최상위 헌법) ===
-      ${/* 기존 Master Prompt 로직 */}
+      // 최종 주입 프롬프트 구성
+      const injectionPrompt = `당신은 BRAINPOOL OS 에이전트입니다.
 
-      === CURRENT DEV CONTEXT (최신 개발 현황) ===
-      ${manusSummary || devCtx?.summary || "현황 로드 실패"}
+${docsContent}
 
-      위 맥락을 완전히 이해하고 작업을 이어가세요.`;
+=== ADDITIONAL DB CONTEXT ===
+마지막 작업: ${devCtx.last_task || '없음'}
+현재 문제: ${devCtx.current_problems || '없음'}
+다음 액션: ${devCtx.next_action || '없음'}
 
-        return Response.json({
-          agent: "claude2",
-          injection_prompt: injectionPrompt,
-          raw: {
-            dev_ctx: { ...devCtx, summary: manusSummary || devCtx?.summary },
-            knowledge_count: knowledgeCount
-          }
-        });
-
-
-      // 주입용 텍스트 조합
-      const constitutionText = docsRes?.docs?.['Master_Prompt_v2.0'] || '';
-      const agentsText       = docsRes?.docs?.['Agents_Directive'] || '';
-
-      const devCtxText = devCtx ? [
-        devCtx.phase       ? `페이즈: ${devCtx.phase}` : '',
-        devCtx.last_task   ? `마지막 작업: ${devCtx.last_task}` : '',
-        devCtx.next_action ? `다음 액션: ${devCtx.next_action}` : '',
-        devCtx.current_problems && devCtx.current_problems !== '없음'
-          ? `현재 문제: ${devCtx.current_problems}` : '',
-        devCtx.development_summary  ? `개발 현황: ${devCtx.development_summary}` : '',
-        devCtx.conversation_summary ? `최근 논의: ${devCtx.conversation_summary}` : '',
-        devCtx.decisions && devCtx.decisions !== '없음'
-          ? `확정 결정: ${devCtx.decisions}` : '',
-      ].filter(Boolean).join('\n') : '개발 맥락 없음';
-
-      const knowledgeText = Array.isArray(knowledgeData) && knowledgeData.length > 0
-        ? knowledgeData
-            .map((k: { knowledge_type?: string; summary?: string; keywords?: string[]; confidence?: number }) =>
-              `[${k.knowledge_type}] ${k.summary || ''} ${k.keywords?.length ? `(${k.keywords.slice(0,3).join(', ')})` : ''}`
-            )
-            .join('\n')
-        : '축적된 Knowledge 없음';
-      // Claude에게 주입할 통합 프롬프트
-      const injectionPrompt = [
-        "당신은 BRAINPOOL OS의 클로2 (HajunAI 담당) 에이전트입니다.",
-        "",
-        "=== CONSTITUTION (불변의 원칙) ===",
-        constitutionText.slice(0, 1500),
-        "",
-        "=== 에이전트 역할 ===",
-        agentsText.slice(0, 500),
-        "",
-        "=== 현재 개발 현황 ===",
-        devCtxText,
-        "",
-        "=== 축적된 Knowledge ===",
-        knowledgeText,
-        "",
-        "위 맥락을 완전히 이해하고 BRAINPOOL 철학에 따라 작업을 이어가세요.",
-      ].join("\n");
+위 맥락을 완전히 이해하고 BRAINPOOL 철학에 따라 작업을 이어가세요.`;
 
       return Response.json({
-        agent,
+        agent: agent,
         injection_prompt: injectionPrompt,
         raw: {
-          constitution: constitutionText.slice(0, 500) + '...',
-          dev_ctx:      devCtx,
-          knowledge_count: Array.isArray(knowledgeData) ? knowledgeData.length : 0,
-        },
-        fetched_at: new Date().toISOString(),
+          dev_ctx: devCtx,
+          knowledge_count: knowledgeData?.length || 0
+        }
       });
     }
 
@@ -457,7 +406,6 @@ export async function POST(req: Request) {
     const body = JSON.parse(rawBody.replace(/^\uFEFF/, ''));
 
     // ── update_context → dev_contexts 패치 (하위 호환 유지) ───
-    // v1.1: Dashboard / Chrome Extension이 기존 action명 그대로 써도 동작
     if (action === 'update_context') {
       const { id, ...fields } = body;
       if (!id) return Response.json({ _error: 'id 필요', traceId }, { status: 200 });
@@ -473,7 +421,7 @@ export async function POST(req: Request) {
       const { message, history = [], owner_key = '' } = body as {
         message: string;
         history: Array<{ role: string; content: string }>;
-        owner_key?: string;  // device_id 기반, Identity Layer 완성 후 교체
+        owner_key?: string;
       };
 
       if (!message || typeof message !== 'string' || message.trim() === '') {
@@ -483,14 +431,12 @@ export async function POST(req: Request) {
         return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
       }
 
-      // CoreHub Architecture v2.0: Opportunity + 개발 맥락 + MindWorld 병렬 조회
       const [contextSummary, mindWorldSummary, opportunities] = await Promise.all([
         fetchContextSummary(),
         fetchMindWorldSummary(),
         fetchOpportunities(owner_key),
       ]);
 
-      // Opportunity 섹션 — 있을 때만 프롬프트에 포함
       const opportunitySection = opportunities.text
         ? `\n발견된 기회 (CoreHub Publish):\n${opportunities.text}\n이 기회들은 강요하지 말고, 대화 흐름에서 자연스럽게 언급할 것.`
         : '';
@@ -520,12 +466,10 @@ ${mindWorldSummary}`;
 
       const { reply, observations } = parseReply(groqResult.text || '');
 
-      // Opportunity 소비 처리 (응답 후 비동기 — 응답 속도에 영향 없음)
       if (opportunities.ids.length > 0) {
         consumeOpportunities(opportunities.ids, 'shown');
       }
 
-      // Phase 5: Trace — opportunity 사용 기록을 meta에 저장
       const chatMeta = opportunities.ids.length > 0
         ? {
             opportunity_ids: opportunities.ids,
@@ -545,26 +489,23 @@ ${mindWorldSummary}`;
       return Response.json({ reply, observations, traceId });
     }
 
-// ── summarize_context (Gemini 2.5 Flash) ──────────────────
-    // v1.2: 마크다운 제거 + 전처리 + 필드별 한 줄 강제
+    // ── summarize_context (Gemini 2.5 Flash) ──────────────────
     if (action === 'summarize_context') {
       if (!GEMINI_KEY) {
         return Response.json({ _error: 'GEMINI_API_KEY 환경변수 미설정', traceId }, { status: 200 });
       }
 
-      // ── 텍스트 정제 헬퍼 ──────────────────────────────────
       function cleanText(text: string, maxLen = 200): string {
         return (text || '')
-          .replace(/\*\*(.+?)\*\*/g, '$1')   // **bold** 제거
-          .replace(/#{1,6}\s/g, '')           // # 헤더 제거
-          .replace(/[\u0060]{1,3}[^\u0060\n]*[\u0060]{1,3}/g, '') // 코드블록 제거
-          .replace(/\n{3,}/g, '\n\n')         // 연속 줄바꿈 압축
-          .replace(/[\u0000-\u001F]/g, ' ')   // 제어문자 제거
+          .replace(/\*\*(.+?)\*\*/g, '$1')
+          .replace(/#{1,6}\s/g, '')
+          .replace(/[\u0060]{1,3}[^\u0060\n]*[\u0060]{1,3}/g, '')
+          .replace(/\n{3,}/g, '\n\n')
+          .replace(/[\u0000-\u001F]/g, ' ')
           .trim()
           .slice(0, maxLen);
       }
 
-      // ── 1. dev_contexts 현재 상태 ─────────────────────────
       let devContextBlock = '개발 맥락 없음';
       try {
         const devData = await supabaseGet('dev_contexts?order=updated_at.desc&limit=1');
@@ -586,7 +527,6 @@ ${mindWorldSummary}`;
         }
       } catch { devContextBlock = '개발 맥락 조회 실패'; }
 
-      // ── 2. 최근 대화 (최근 30건, knowledge_type 분류) ─────
       let conversationBlock = '대화 없음';
       try {
         const convData = await supabaseGet(
@@ -606,7 +546,6 @@ ${mindWorldSummary}`;
 
         const sections: string[] = [];
 
-        // raw 대화 — 정제 후 한 줄씩
         if (byType['raw'] && byType['raw'].length > 0) {
           sections.push('[최근 대화]');
           const lines = byType['raw']
@@ -620,7 +559,6 @@ ${mindWorldSummary}`;
           sections.push(lines.join('\n'));
         }
 
-        // Knowledge Units — summary만 추출
         for (const type of ['language', 'context', 'life', 'pattern'] as const) {
           if (byType[type] && byType[type].length > 0) {
             const label: Record<string, string> = {
@@ -643,10 +581,8 @@ ${mindWorldSummary}`;
         return Response.json({ _error: '대화 데이터 조회 실패', traceId }, { status: 200 });
       }
 
-      // ── 3. MindWorld 현황 ──────────────────────────────────
       const mindWorldSummary = await fetchMindWorldSummary();
 
-      // ── 4. Gemini 구조화 프롬프트 ─────────────────────────
       const summarizePrompt = `You are a JSON-only output machine.
 CRITICAL: Output ONLY a single valid JSON object. No markdown. No code fences. No explanation. No newlines inside string values.
 
@@ -703,7 +639,6 @@ ${mindWorldSummary}`;
         .map((p: { text: string }) => p.text)
         .join('');
 
-      // ── 파싱 4단계 방어 ───────────────────────────────────
       const FIELDS = ['last_task','summary','next_action','current_problems',
                       'development_summary','conversation_summary','decisions','risks'];
 
@@ -757,7 +692,6 @@ ${mindWorldSummary}`;
         }, { status: 200 });
       }
 
-      // 기본값 채우기
       for (const f of ['current_problems','decisions','risks']) {
         if (!parsed[f]) parsed[f] = '없음';
       }
@@ -777,7 +711,7 @@ ${mindWorldSummary}`;
       });
     }
 
-        return Response.json({ _error: '알 수 없는 action', traceId }, { status: 200 });
+    return Response.json({ _error: '알 수 없는 action', traceId }, { status: 200 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return Response.json({ _error: msg, traceId }, { status: 500 });
