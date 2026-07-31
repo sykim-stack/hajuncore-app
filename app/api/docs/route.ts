@@ -1,9 +1,9 @@
 // app/api/docs/route.ts
 // brainpool-os GitHub 문서를 fetch해서 반환
-// Claude가 직접 GitHub raw URL에 접근 못하는 문제 해결
 // GET /api/docs?file=Master_Prompt_v2.0
-// GET /api/docs?file=Agents_Directive
-// GET /api/docs?file=all  → 주요 문서 전체
+// GET /api/docs?file=clo2 | clo3
+// GET /api/docs?agent=claude2 | clo3  → 해당 에이전트 기본 문서 일괄
+// GET /api/docs?file=all
 
 export const dynamic = 'force-dynamic';
 
@@ -17,28 +17,38 @@ const DOC_MAP: Record<string, string> = {
   'WORKFLOW':              'doc/automation/WORKFLOW.md',
   'PM_GUARD':              'doc/automation/PM_GUARD.md',
   'ADR_001':               'doc/adr/ADR-001-Derived-Data-Layer.md',
+  'ADR_ACCESS_001':        'doc/adr/ADR-ACCESS-001.md',
+  'clo2':                  'doc/contexts/clo2.md',
+  'clo3':                  'doc/contexts/clo3.md',
+  'CORENULL_ROADMAP':      'doc/status/CORENULL_ROADMAP.md',
+  'DEV_CONTEXT_SUMMARY':   'doc/status/DEV_CONTEXT_SUMMARY.md',
+  'DOC_INDEX':             'doc/DOC_INDEX.md',
 };
 
-// 클로2 기본 주입 문서 목록
-const CLAUDE2_DOCS = ['Master_Prompt_v2.0', 'Agents_Directive'];
+// 에이전트별 기본 주입 문서
+const AGENT_DOCS: Record<string, string[]> = {
+  claude2: ['Master_Prompt_v2.0', 'Agents_Directive', 'clo2'],
+  clo2:    ['Master_Prompt_v2.0', 'Agents_Directive', 'clo2'],
+  clo3:    ['Master_Prompt_v2.0', 'Agents_Directive', 'clo3', 'CORENULL_ROADMAP', 'CoreNull_Seed_System'],
+};
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const file  = searchParams.get('file') || 'Master_Prompt_v2.0';
-  const agent = searchParams.get('agent'); // ?agent=claude2 → 해당 에이전트 기본 문서
+  const agent = searchParams.get('agent'); // ?agent=clo3 → 해당 에이전트 기본 문서
 
   try {
-    // ?agent=claude2 → 클로2 기본 문서 일괄 반환
-    if (agent === 'claude2') {
+    // ?agent=xxx → 에이전트 기본 문서 일괄 반환
+    if (agent && AGENT_DOCS[agent]) {
       const results: Record<string, string> = {};
-      for (const key of CLAUDE2_DOCS) {
+      for (const key of AGENT_DOCS[agent]) {
         const path = DOC_MAP[key];
         if (!path) continue;
         const res = await fetch(`${GITHUB_RAW_BASE}/${path}`, { cache: 'no-store' });
         results[key] = res.ok ? await res.text() : `[fetch 실패: ${res.status}]`;
       }
       return Response.json({
-        agent: 'claude2',
+        agent,
         docs: results,
         fetched_at: new Date().toISOString(),
       });
@@ -57,7 +67,7 @@ export async function GET(req: Request) {
       });
     }
 
-    // ?file=Master_Prompt_v2.0 → 단일 문서
+    // ?file=xxx → 단일 문서
     const path = DOC_MAP[file];
     if (!path) {
       return Response.json({
