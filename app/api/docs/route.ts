@@ -1,8 +1,7 @@
 // app/api/docs/route.ts
 // brainpool-os GitHub 문서를 fetch해서 반환
-// GET /api/docs?file=Master_Prompt_v2.0
-// GET /api/docs?file=clo2 | clo3
-// GET /api/docs?agent=claude2 | clo3  → 해당 에이전트 기본 문서 일괄
+// GET /api/docs?file=Master_Prompt_v2.0 | clo2 | clo3 | CORENULL_ROADMAP
+// GET /api/docs?agent=clo2 | clo3  → 해당 에이전트 기본 문서 일괄
 // GET /api/docs?file=all
 
 export const dynamic = 'force-dynamic';
@@ -25,7 +24,6 @@ const DOC_MAP: Record<string, string> = {
   'DOC_INDEX':             'doc/DOC_INDEX.md',
 };
 
-// 에이전트별 기본 주입 문서
 const AGENT_DOCS: Record<string, string[]> = {
   claude2: ['Master_Prompt_v2.0', 'Agents_Directive', 'clo2'],
   clo2:    ['Master_Prompt_v2.0', 'Agents_Directive', 'clo2'],
@@ -34,19 +32,21 @@ const AGENT_DOCS: Record<string, string[]> = {
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const file  = searchParams.get('file') || 'Master_Prompt_v2.0';
-  const agent = searchParams.get('agent'); // ?agent=clo3 → 해당 에이전트 기본 문서
+  const file  = searchParams.get('file');
+  const agent = searchParams.get('agent');
 
   try {
-    // ?agent=xxx → 에이전트 기본 문서 일괄 반환
+    // ?agent=xxx → 에이전트 기본 문서 일괄 (file보다 우선)
     if (agent && AGENT_DOCS[agent]) {
       const results: Record<string, string> = {};
-      for (const key of AGENT_DOCS[agent]) {
-        const path = DOC_MAP[key];
-        if (!path) continue;
-        const res = await fetch(`${GITHUB_RAW_BASE}/${path}`, { cache: 'no-store' });
-        results[key] = res.ok ? await res.text() : `[fetch 실패: ${res.status}]`;
-      }
+      await Promise.all(
+        AGENT_DOCS[agent].map(async (key) => {
+          const path = DOC_MAP[key];
+          if (!path) return;
+          const res = await fetch(`${GITHUB_RAW_BASE}/${path}`, { cache: 'no-store' });
+          results[key] = res.ok ? await res.text() : `[fetch 실패: ${res.status}]`;
+        })
+      );
       return Response.json({
         agent,
         docs: results,
@@ -54,24 +54,26 @@ export async function GET(req: Request) {
       });
     }
 
-    // ?file=all → 전체 문서
-    if (file === 'all') {
+    const fileKey = file || 'Master_Prompt_v2.0';
+
+    if (fileKey === 'all') {
       const results: Record<string, string> = {};
-      for (const [key, path] of Object.entries(DOC_MAP)) {
-        const res = await fetch(`${GITHUB_RAW_BASE}/${path}`, { cache: 'no-store' });
-        results[key] = res.ok ? await res.text() : `[fetch 실패: ${res.status}]`;
-      }
+      await Promise.all(
+        Object.entries(DOC_MAP).map(async ([key, path]) => {
+          const res = await fetch(`${GITHUB_RAW_BASE}/${path}`, { cache: 'no-store' });
+          results[key] = res.ok ? await res.text() : `[fetch 실패: ${res.status}]`;
+        })
+      );
       return Response.json({
         docs: results,
         fetched_at: new Date().toISOString(),
       });
     }
 
-    // ?file=xxx → 단일 문서
-    const path = DOC_MAP[file];
+    const path = DOC_MAP[fileKey];
     if (!path) {
       return Response.json({
-        _error: `알 수 없는 문서: ${file}`,
+        _error: `알 수 없는 문서: ${fileKey}`,
         available: Object.keys(DOC_MAP),
       });
     }
@@ -83,12 +85,11 @@ export async function GET(req: Request) {
 
     const content = await res.text();
     return Response.json({
-      file,
+      file: fileKey,
       path,
       content,
       fetched_at: new Date().toISOString(),
     });
-
   } catch (e) {
     return Response.json(
       { _error: e instanceof Error ? e.message : String(e) },
