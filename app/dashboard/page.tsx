@@ -97,7 +97,6 @@ export default function Dashboard() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // project_id 필터 — API가 무시해도 payload 최신 1건 사용
       const res = await fetch(
         `/api/hajun?action=dev_contexts&project_id=${encodeURIComponent(selectedAI.id)}`,
         { cache: 'no-store' }
@@ -135,7 +134,7 @@ export default function Dashboard() {
       const res = await fetch('/api/hajun?action=update_context', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: ctx.id, ...ctx }),
+        body: JSON.stringify({ ...ctx }),
       });
       const json = await res.json();
       setMsg(json._error ? `❌ ${json._error}` : '✅ 저장 완료');
@@ -198,7 +197,6 @@ export default function Dashboard() {
           마지막 업데이트: {ctx?.updated_at ? new Date(ctx.updated_at).toLocaleString('ko-KR') : '-'}
         </div>
 
-        {/* 프로젝트 탭 */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 24, flexWrap: 'wrap' }}>
           {AI_PROJECTS.map(ai => (
             <button
@@ -329,7 +327,7 @@ export default function Dashboard() {
               </div>
               <div style={S.promptBox}>{prompt}</div>
               <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 8 }}>
-                Claude / ChatGPT 채팅창에 붙여넣으세요 · context_package API: /api/hajun?action=context_package&agent=clo3
+                Claude / ChatGPT 채팅창에 붙여넣으세요 · context_package: /api/hajun?action=context_package&agent=clo3
               </div>
             </div>
           </>
