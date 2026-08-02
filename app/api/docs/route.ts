@@ -1,9 +1,9 @@
 // app/api/docs/route.ts
-// brainpool-os GitHub 문서를 fetch해서 반환
-// Claude가 직접 GitHub raw URL에 접근 못하는 문제 해결
+// brainpool-os GitHub 臾몄꽌瑜?fetch?댁꽌 諛섑솚
+// Claude媛 吏곸젒 GitHub raw URL???묎렐 紐삵븯??臾몄젣 ?닿껐
 // GET /api/docs?file=Master_Prompt_v2.0
 // GET /api/docs?file=Agents_Directive
-// GET /api/docs?file=all  → 주요 문서 전체
+// GET /api/docs?file=all  ??二쇱슂 臾몄꽌 ?꾩껜
 
 export const dynamic = 'force-dynamic';
 
@@ -23,28 +23,25 @@ const DOC_MAP: Record<string, string> = {
   'clo4':                  'doc/contexts/clo4.md',
   'clo5':                  'doc/contexts/clo5.md',
   'pm':                    'doc/contexts/pm.md',
-  'clo4':                  'doc/contexts/clo4.md',
-  'clo5':                  'doc/contexts/clo5.md',
-  'pm':                    'doc/contexts/pm.md',
 };
 
-// 클로2 기본 주입 문서 목록
+// ?대줈2 湲곕낯 二쇱엯 臾몄꽌 紐⑸줉
 const CLAUDE2_DOCS = ['Master_Prompt_v2.0', 'Agents_Directive', 'clo2'];
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const file  = searchParams.get('file') || 'Master_Prompt_v2.0';
-  const agent = searchParams.get('agent'); // ?agent=claude2 → 해당 에이전트 기본 문서
+  const agent = searchParams.get('agent'); // ?agent=claude2 ???대떦 ?먯씠?꾪듃 湲곕낯 臾몄꽌
 
   try {
-    // ?agent=claude2 → 클로2 기본 문서 일괄 반환
+    // ?agent=claude2 ???대줈2 湲곕낯 臾몄꽌 ?쇨큵 諛섑솚
     if (agent === 'claude2') {
       const results: Record<string, string> = {};
       for (const key of CLAUDE2_DOCS) {
         const path = DOC_MAP[key];
         if (!path) continue;
         const res = await fetch(`${GITHUB_RAW_BASE}/${path}`, { cache: 'no-store' });
-        results[key] = res.ok ? await res.text() : `[fetch 실패: ${res.status}]`;
+        results[key] = res.ok ? await res.text() : `[fetch ?ㅽ뙣: ${res.status}]`;
       }
       return Response.json({
         agent: 'claude2',
@@ -53,12 +50,12 @@ export async function GET(req: Request) {
       });
     }
 
-    // ?file=all → 전체 문서
+    // ?file=all ???꾩껜 臾몄꽌
     if (file === 'all') {
       const results: Record<string, string> = {};
       for (const [key, path] of Object.entries(DOC_MAP)) {
         const res = await fetch(`${GITHUB_RAW_BASE}/${path}`, { cache: 'no-store' });
-        results[key] = res.ok ? await res.text() : `[fetch 실패: ${res.status}]`;
+        results[key] = res.ok ? await res.text() : `[fetch ?ㅽ뙣: ${res.status}]`;
       }
       return Response.json({
         docs: results,
@@ -66,18 +63,18 @@ export async function GET(req: Request) {
       });
     }
 
-    // ?file=Master_Prompt_v2.0 → 단일 문서
+    // ?file=Master_Prompt_v2.0 ???⑥씪 臾몄꽌
     const path = DOC_MAP[file];
     if (!path) {
       return Response.json({
-        _error: `알 수 없는 문서: ${file}`,
+        _error: `?????녿뒗 臾몄꽌: ${file}`,
         available: Object.keys(DOC_MAP),
       });
     }
 
     const res = await fetch(`${GITHUB_RAW_BASE}/${path}`, { cache: 'no-store' });
     if (!res.ok) {
-      return Response.json({ _error: `GitHub fetch 실패: ${res.status}` });
+      return Response.json({ _error: `GitHub fetch ?ㅽ뙣: ${res.status}` });
     }
 
     const content = await res.text();
