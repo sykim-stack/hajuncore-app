@@ -1,6 +1,6 @@
 // lib/contextPackage.ts
 // context_package — agent별 세션 시작 맥락 패키지
-// GET /api/hajun?action=context_package&agent=clo2|clo3
+// GET /api/hajun?action=context_package&agent=clo2|clo3|pm
 
 import { supabaseGet } from '@/lib/supabase';
 
@@ -11,6 +11,7 @@ const DOCS_BASE = 'https://hajuncore-app.vercel.app/api/docs';
 const AGENT_DOC_KEYS: Record<string, string[]> = {
   clo2: ['Master_Prompt_v2.0', 'Agents_Directive', 'clo2'],
   clo3: ['Master_Prompt_v2.0', 'Agents_Directive', 'clo3', 'CORENULL_ROADMAP', 'CoreNull_Seed_System'],
+  pm:   ['Master_Prompt_v2.0', 'Agents_Directive', 'pm', 'PM_GUARD', 'WORKFLOW', 'DOC_INDEX', 'DEV_CONTEXT_SUMMARY'],
 };
 
 /** 단일 문서 fetch — { content } 또는 실패 시 빈 문자열 */
@@ -121,7 +122,9 @@ export async function buildContextPackage(agentParam: string | null) {
   const constitutionText = docs['Master_Prompt_v2.0'] || '';
   const agentsText = docs['Agents_Directive'] || '';
   const contractText =
-    normalizedAgent === 'clo3' ? docs['clo3'] || '' : docs['clo2'] || '';
+    normalizedAgent === 'clo3' ? docs['clo3'] || ''
+    : normalizedAgent === 'pm' ? docs['pm'] || ''
+    : docs['clo2'] || '';
   const roadmapText = docs['CORENULL_ROADMAP'] || '';
   const seedText = docs['CoreNull_Seed_System'] || '';
 
@@ -141,21 +144,32 @@ export async function buildContextPackage(agentParam: string | null) {
           .join('\n')
       : '축적된 Knowledge 없음';
 
-  const roleLine =
-    normalizedAgent === 'clo3'
-      ? [
-          '당신은 BRAINPOOL OS의 클로3 (CoreNull Space Layer) 에이전트입니다.',
-          'CoreNull은 껍데기다. 글·이미지·댓글만 존재한다.',
-          'Primitive: House → Room → Post',
-          'Seed / Flower / Fruit = Room 상태값 (별도 테이블·객체 아님).',
-          '새 Primitive는 최후의 수단. View Scope로 Experience를 표현한다.',
-          '판단·추천·의미분석은 하지 않는다 (CoreHub / HajunAI / CoreRing 영역).',
-        ].join('\n')
-      : [
-          '당신은 BRAINPOOL OS의 클로2 (HajunAI Mind Layer) 에이전트입니다.',
-          'Messages 직접 접근을 최소화한다. Knowledge Unit·Context로 사람을 이해한다.',
-          'seed_mode는 별도 Seed 엔티티가 아니라 Room 상태값으로 해석한다.',
-        ].join('\n');
+  let roleLine: string;
+  if (normalizedAgent === 'clo3') {
+    roleLine = [
+      '당신은 BRAINPOOL OS의 클로3 (CoreNull Space Layer) 에이전트입니다.',
+      'CoreNull은 껍데기다. 글·이미지·댓글만 존재한다.',
+      'Primitive: House → Room → Post',
+      'Seed / Flower / Fruit = Room 상태값 (별도 테이블·객체 아님).',
+      '새 Primitive는 최후의 수단. View Scope로 Experience를 표현한다.',
+      '판단·추천·의미분석은 하지 않는다 (CoreHub / HajunAI / CoreRing 영역).',
+    ].join('\n');
+  } else if (normalizedAgent === 'pm') {
+    roleLine = [
+      '당신은 BRAINPOOL OS의 PM (Grok) — Context Guardian 입니다.',
+      '역할: Context Guardian + Drift Detection + Knowledge Synchronization.',
+      'Commit = 상태 변화 이벤트. 분석 후 문서에 반영한다.',
+      'Core를 소유하지 않는다. 기능을 구현하지 않는다. 최종 결정을 하지 않는다.',
+      '금지: Layer/Core 책임 변경, SoT/Pipeline 변경, Master Prompt 직접 수정, ADR 없는 구조 변경.',
+      '주 작업 공간: brainpool-os/doc/. 각 Core 레포는 읽기·분석만.',
+    ].join('\n');
+  } else {
+    roleLine = [
+      '당신은 BRAINPOOL OS의 클로2 (HajunAI Mind Layer) 에이전트입니다.',
+      'Messages 직접 접근을 최소화한다. Knowledge Unit·Context로 사람을 이해한다.',
+      'seed_mode는 별도 Seed 엔티티가 아니라 Room 상태값으로 해석한다.',
+    ].join('\n');
+  }
 
   const parts: string[] = [
     roleLine,
@@ -170,6 +184,8 @@ export async function buildContextPackage(agentParam: string | null) {
     contractText.slice(0, 2500) ||
       (normalizedAgent === 'clo3'
         ? '(clo3.md 로드 실패 — /api/docs?file=clo3 확인)'
+        : normalizedAgent === 'pm'
+        ? '(pm.md 로드 실패 — /api/docs?file=pm 확인)'
         : '(clo2.md 로드 실패)'),
   ];
 
@@ -180,6 +196,17 @@ export async function buildContextPackage(agentParam: string | null) {
     if (seedText) {
       parts.push('', '=== Seed System ===', seedText.slice(0, 1200));
     }
+  }
+
+  if (normalizedAgent === 'pm') {
+    const guard = docs['PM_GUARD'] || '';
+    const workflow = docs['WORKFLOW'] || '';
+    const index = docs['DOC_INDEX'] || '';
+    const summary = docs['DEV_CONTEXT_SUMMARY'] || '';
+    if (guard) parts.push('', '=== PM Guard ===', guard.slice(0, 2000));
+    if (workflow) parts.push('', '=== Workflow ===', workflow.slice(0, 1500));
+    if (index) parts.push('', '=== DOC_INDEX ===', index.slice(0, 1200));
+    if (summary) parts.push('', '=== DEV_CONTEXT_SUMMARY ===', summary.slice(0, 1500));
   }
 
   parts.push(
@@ -193,6 +220,8 @@ export async function buildContextPackage(agentParam: string | null) {
     '위 맥락을 완전히 이해하고 BRAINPOOL 철학에 따라 작업을 이어가세요.',
     normalizedAgent === 'clo3'
       ? 'Phase A 순서: Room Card → 거실 → 광장 → 마당(집주인만) → 서재. 재작업 금지 항목은 건드리지 마세요.'
+      : normalizedAgent === 'pm'
+      ? 'Commit을 상태 변화 이벤트로 보고, Drift가 있으면 보고만 하고 금지 행위는 하지 마세요. 문서 동기화는 brainpool-os/doc 범위 안에서.'
       : ''
   );
 
