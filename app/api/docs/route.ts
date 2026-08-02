@@ -23,6 +23,9 @@ const DOC_MAP: Record<string, string> = {
   'clo4':                  'doc/contexts/clo4.md',
   'clo5':                  'doc/contexts/clo5.md',
   'pm':                    'doc/contexts/pm.md',
+  'clo4':                  'doc/contexts/clo4.md',
+  'clo5':                  'doc/contexts/clo5.md',
+  'pm':                    'doc/contexts/pm.md',
 };
 
 // 클로2 기본 주입 문서 목록
