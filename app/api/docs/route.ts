@@ -1,7 +1,7 @@
 // app/api/docs/route.ts
 // brainpool-os GitHub 문서를 fetch해서 반환
-// GET /api/docs?file=Master_Prompt_v2.0 | clo2 | clo3 | CORENULL_ROADMAP
-// GET /api/docs?agent=clo2 | clo3  → 해당 에이전트 기본 문서 일괄
+// GET /api/docs?file=Master_Prompt_v2.0 | clo2 | clo3 | pm | CORENULL_ROADMAP
+// GET /api/docs?agent=clo2 | clo3 | pm  → 해당 에이전트 기본 문서 일괄
 // GET /api/docs?file=all
 
 export const dynamic = 'force-dynamic';
@@ -19,6 +19,7 @@ const DOC_MAP: Record<string, string> = {
   'ADR_ACCESS_001':        'doc/adr/ADR-ACCESS-001.md',
   'clo2':                  'doc/contexts/clo2.md',
   'clo3':                  'doc/contexts/clo3.md',
+  'pm':                    'doc/contexts/pm.md',
   'CORENULL_ROADMAP':      'doc/status/CORENULL_ROADMAP.md',
   'DEV_CONTEXT_SUMMARY':   'doc/status/DEV_CONTEXT_SUMMARY.md',
   'DOC_INDEX':             'doc/DOC_INDEX.md',
@@ -28,6 +29,7 @@ const AGENT_DOCS: Record<string, string[]> = {
   claude2: ['Master_Prompt_v2.0', 'Agents_Directive', 'clo2'],
   clo2:    ['Master_Prompt_v2.0', 'Agents_Directive', 'clo2'],
   clo3:    ['Master_Prompt_v2.0', 'Agents_Directive', 'clo3', 'CORENULL_ROADMAP', 'CoreNull_Seed_System'],
+  pm:      ['Master_Prompt_v2.0', 'Agents_Directive', 'pm', 'PM_GUARD', 'WORKFLOW', 'DOC_INDEX', 'DEV_CONTEXT_SUMMARY'],
 };
 
 export async function GET(req: Request) {
@@ -36,7 +38,6 @@ export async function GET(req: Request) {
   const agent = searchParams.get('agent');
 
   try {
-    // ?agent=xxx → 에이전트 기본 문서 일괄 (file보다 우선)
     if (agent && AGENT_DOCS[agent]) {
       const results: Record<string, string> = {};
       await Promise.all(
