@@ -51,7 +51,7 @@ export async function fetchLanguageKnowledge(
     text,
     limit = 5,
     minConfidence = 0.6,
-    includeCandidate = false,
+    includeCandidate = true, // Phase 2 시작 시점: verified가 아직 없어 candidate 허용
   } = query;
 
   const params: string[] = [];
@@ -59,9 +59,13 @@ export async function fetchLanguageKnowledge(
   params.push(`limit=${limit}`);
   params.push(`confidence=gte.${minConfidence}`);
 
+  // deprecated만 제외. verified 데이터가 쌓이면 includeCandidate=false로 verified만 쓰도록 전환.
   if (!includeCandidate) {
     params.push('status=eq.verified');
+  } else {
+    params.push('status=neq.deprecated');
   }
+
   if (pattern_key) {
     params.push(`pattern_key=eq.${encodeURIComponent(pattern_key)}`);
   }
@@ -75,7 +79,10 @@ export async function fetchLanguageKnowledge(
 
   const path = `language_knowledge?${params.join('&')}`;
   const data = await supabaseGet(path);
-  return Array.isArray(data) ? data : [];
+  const rows: LanguageKnowledge[] = Array.isArray(data) ? data : [];
+
+  // 방어적 필터: source_expression이 비정상적으로 길면(문장 전체가 잘못 들어간 경우) 제외
+  return rows.filter((r) => !r.source_expression || r.source_expression.length <= 40);
 }
 
 /**
