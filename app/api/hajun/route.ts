@@ -14,6 +14,7 @@
 //   그대로 주입하고, dev_contexts의 last_task/current_problems/next_action 만 포함
 
 import { supabaseGet, supabasePatch } from '@/lib/supabase';
+import { fetchLanguageKnowledge, buildLanguageKnowledgeBlock } from '@/lib/languageKnowledge';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
@@ -431,14 +432,22 @@ export async function POST(req: Request) {
         return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
       }
 
-      const [contextSummary, mindWorldSummary, opportunities] = await Promise.all([
+      // CoreHub Architecture v2.0 + Language Knowledge Phase 2: 병렬 조회
+      const [contextSummary, mindWorldSummary, opportunities, languageKnowledgeItems] = await Promise.all([
         fetchContextSummary(),
         fetchMindWorldSummary(),
         fetchOpportunities(owner_key),
+        fetchLanguageKnowledge({ text: message.trim(), limit: 3 }),
       ]);
 
+      // Opportunity 섹션 — 있을 때만 프롬프트에 포함
       const opportunitySection = opportunities.text
         ? `\n발견된 기회 (CoreHub Publish):\n${opportunities.text}\n이 기회들은 강요하지 말고, 대화 흐름에서 자연스럽게 언급할 것.`
+        : '';
+
+      // Language Knowledge 섹션 (Phase 2) — 있을 때만, 참고용으로만 포함
+      const languageKnowledgeSection = languageKnowledgeItems.length > 0
+        ? `\n관련 언어 지식 (CoreRing Language Knowledge, 참고용 — 강요하지 말 것):\n${buildLanguageKnowledgeBlock(languageKnowledgeItems)}`
         : '';
 
       const systemPrompt = `당신은 HajunAI입니다. BRAINPOOL 프로젝트의 개인 전략 비서입니다.
@@ -451,7 +460,7 @@ export async function POST(req: Request) {
 - 한국어로만 답하세요.
 - 제안은 하되 강요하지 않습니다. 사용자 대신 결정하지 않습니다.
 - 필요하다고 판단되면 답변 끝에 "관찰:" 섹션을 추가하세요.
-  형식: 관찰:\n- 항목1\n- 항목2${opportunitySection}
+  형식: 관찰:\n- 항목1\n- 항목2${opportunitySection}${languageKnowledgeSection}
 
 현재 개발 맥락:
 ${contextSummary}
