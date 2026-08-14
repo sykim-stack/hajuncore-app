@@ -15,7 +15,6 @@
 
 import { supabaseGet, supabasePatch } from '@/lib/supabase';
 import { fetchLanguageKnowledge, buildLanguageKnowledgeBlock } from '@/lib/languageKnowledge';
-import { fetchLanguageKnowledge, buildLanguageKnowledgeBlock } from '@/lib/languageKnowledge';
 import {
   looksLikeCompletion,
   summarizeWorkLog,
