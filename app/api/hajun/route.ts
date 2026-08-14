@@ -15,6 +15,14 @@
 
 import { supabaseGet, supabasePatch } from '@/lib/supabase';
 import { fetchLanguageKnowledge, buildLanguageKnowledgeBlock } from '@/lib/languageKnowledge';
+import { fetchLanguageKnowledge, buildLanguageKnowledgeBlock } from '@/lib/languageKnowledge';
+import {
+  looksLikeCompletion,
+  summarizeWorkLog,
+  saveWorkLog,
+  fetchRecentWorkLogs,
+  buildWorkLogBlock,
+} from '@/lib/workLog';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
@@ -417,7 +425,7 @@ export async function POST(req: Request) {
       return Response.json({ payload: data[0] || null, traceId });
     }
 
-    // ── chat (Groq) ────────────────────────────────────────────
+   // ── chat (Groq) ────────────────────────────────────────────
     if (action === 'chat') {
       const { message, history = [], owner_key = '' } = body as {
         message: string;
@@ -432,23 +440,45 @@ export async function POST(req: Request) {
         return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
       }
 
-      // CoreHub Architecture v2.0 + Language Knowledge Phase 2: 병렬 조회
-      const [contextSummary, mindWorldSummary, opportunities, languageKnowledgeItems] = await Promise.all([
-        fetchContextSummary(),
-        fetchMindWorldSummary(),
-        fetchOpportunities(owner_key),
-        fetchLanguageKnowledge({ text: message.trim(), limit: 3 }),
-      ]);
+      const trimmedMessage = message.trim();
 
-      // Opportunity 섹션 — 있을 때만 프롬프트에 포함
+      // CoreHub + Language Knowledge + Work Log 병렬 조회
+      const [contextSummary, mindWorldSummary, opportunities, languageKnowledgeItems, recentWorkLogs] =
+        await Promise.all([
+          fetchContextSummary(),
+          fetchMindWorldSummary(),
+          fetchOpportunities(owner_key),
+          fetchLanguageKnowledge({ text: trimmedMessage, limit: 3 }),
+          fetchRecentWorkLogs(5),
+        ]);
+
+      // 완료 신호 감지 — 키워드 통과 시에만 Gemini 2차 확인 (비용 절약)
+      let workLogSaveNote = '';
+      if (looksLikeCompletion(trimmedMessage)) {
+        const workLogResult = await summarizeWorkLog(history, trimmedMessage);
+        if (workLogResult.isCompletion && workLogResult.entry) {
+          const saved = await saveWorkLog(workLogResult.entry);
+          if (!saved._error) {
+            workLogSaveNote = `\n\n[시스템 알림] 방금 사용자의 메시지를 작업 완료 기록으로 저장했습니다.
+제목: ${workLogResult.entry.title}
+요약: ${workLogResult.entry.summary}${workLogResult.entry.issues ? `\n미해결: ${workLogResult.entry.issues}` : ''}${workLogResult.entry.next_steps ? `\n다음: ${workLogResult.entry.next_steps}` : ''}
+사용자에게 자연스럽게 저장 완료를 알리고, 미해결 사항이나 다음 단계가 있으면 짚어주세요.`;
+          }
+        }
+      }
+
+      // Opportunity 섹션
       const opportunitySection = opportunities.text
         ? `\n발견된 기회 (CoreHub Publish):\n${opportunities.text}\n이 기회들은 강요하지 말고, 대화 흐름에서 자연스럽게 언급할 것.`
         : '';
 
-      // Language Knowledge 섹션 (Phase 2) — 있을 때만, 참고용으로만 포함
+      // Language Knowledge 섹션
       const languageKnowledgeSection = languageKnowledgeItems.length > 0
         ? `\n관련 언어 지식 (CoreRing Language Knowledge, 참고용 — 강요하지 말 것):\n${buildLanguageKnowledgeBlock(languageKnowledgeItems)}`
         : '';
+
+      // Work Log 섹션 — 항상 포함 (남은 작업/오류 질문에 답하기 위함)
+      const workLogSection = `\n\n최근 작업 기록:\n${buildWorkLogBlock(recentWorkLogs)}`;
 
       const systemPrompt = `당신은 HajunAI입니다. BRAINPOOL 프로젝트의 개인 전략 비서입니다.
 질문에 단순히 답하는 AI가 아니라, 프로젝트와 삶의 흐름을 이해하고
@@ -466,9 +496,9 @@ export async function POST(req: Request) {
 ${contextSummary}
 
 현재 씨앗/공간 상태 (MindWorld):
-${mindWorldSummary}`;
+${mindWorldSummary}${workLogSection}${workLogSaveNote}`;
 
-      const groqResult = await callGroq(systemPrompt, message.trim(), history);
+      const groqResult = await callGroq(systemPrompt, trimmedMessage, history);
       if (groqResult._error) {
         return Response.json({ _error: groqResult._error, traceId }, { status: 200 });
       }
@@ -480,11 +510,7 @@ ${mindWorldSummary}`;
       }
 
       const chatMeta = opportunities.ids.length > 0
-        ? {
-            opportunity_ids: opportunities.ids,
-            used_at: new Date().toISOString(),
-            trace_id: traceId,
-          }
+        ? { opportunity_ids: opportunities.ids, used_at: new Date().toISOString(), trace_id: traceId }
         : undefined;
 
       saveConversation({
