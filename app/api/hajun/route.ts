@@ -414,7 +414,7 @@ export async function POST(req: Request) {
     const body = JSON.parse(rawBody.replace(/^\uFEFF/, ''));
 
     // ── update_context → dev_contexts 패치 (하위 호환 유지) ───
-    if (action === 'update_context') {
+    if (action === 'update_dev_context') {
       const { id, ...fields } = body;
       if (!id) return Response.json({ _error: 'id 필요', traceId }, { status: 200 });
       const data = await supabasePatch('dev_contexts', id, {
