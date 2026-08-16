@@ -22,6 +22,7 @@ import {
   fetchRecentWorkLogs,
   buildWorkLogBlock,
 } from '@/lib/workLog';
+import { runDevChat } from '@/lib/devAiPanel';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
@@ -271,6 +272,7 @@ export async function GET(req: Request) {
       );
       return Response.json({ payload: data[0] || null });
     }
+    
 
     // 개발 핸드오프 — dev_contexts (구 contexts 역할, v1.1 신규)
     if (action === 'dev_contexts') {
@@ -522,7 +524,32 @@ ${mindWorldSummary}${workLogSection}${workLogSaveNote}`;
 
       return Response.json({ reply, observations, traceId });
     }
+// ── dev_chat (Groq + Gemini + NVIDIA 취합) ─────────────────
+    if (action === 'dev_chat') {
+      const { message } = body as { message: string };
+      if (!message || typeof message !== 'string' || message.trim() === '') {
+        return Response.json({ _error: '메시지가 비어있습니다', traceId }, { status: 200 });
+      }
 
+      const contextSummary = await fetchContextSummary();
+      const result = await runDevChat(message.trim(), contextSummary);
+
+      saveConversation({
+        source_ai: 'HajunAI-DevChat',
+        original_message: `[개발질문] ${message}\n[취합답변:${result.bestSource}] ${result.finalAnswer}`,
+        summary: result.finalAnswer.slice(0, 100),
+        keywords: ['dev_chat', 'multi_ai', ...result.participants.map((p) => p.toLowerCase())],
+      });
+
+      return Response.json({
+        reply: result.finalAnswer,
+        bestSource: result.bestSource,
+        judgedBy: result.judgedBy,
+        participants: result.participants,
+        failed: result.failed,
+        traceId,
+      });
+    }
     // ── summarize_context (Gemini 2.5 Flash) ──────────────────
     if (action === 'summarize_context') {
       if (!GEMINI_KEY) {

@@ -3,10 +3,18 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import Sidebar from '@/components/Sidebar';
 
+type ChatMode = 'control' | 'dev';
+
 type Message = {
   role: 'user' | 'assistant';
   content: string;
   observations?: string[];
+  devMeta?: {
+    bestSource: string;
+    judgedBy: string;
+    participants: string[];
+    failed: string[];
+  };
 };
 
 type ContextDraft = {
@@ -30,6 +38,9 @@ const S: Record<string, CSSProperties> = {
   obsBox:      { marginTop: 10, padding: '8px 10px', background: 'rgba(63,185,80,0.07)', border: '1px solid rgba(63,185,80,0.2)', borderRadius: 6 },
   obsLabel:    { fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: 'var(--accent2)', fontFamily: 'JetBrains Mono, monospace', marginBottom: 6 },
   obsItem:     { fontSize: 12, color: 'var(--text2)', lineHeight: 1.6, paddingLeft: 2 },
+  devMetaBox:  { marginTop: 10, padding: '8px 10px', background: 'rgba(210,168,255,0.07)', border: '1px solid rgba(210,168,255,0.2)', borderRadius: 6 },
+  devMetaLabel:{ fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: '#D2A8FF', fontFamily: 'JetBrains Mono, monospace', marginBottom: 6 },
+  devMetaItem: { fontSize: 11, color: 'var(--text2)', lineHeight: 1.6 },
   inputArea:   { padding: '12px 24px 16px', borderTop: '1px solid var(--border)', background: 'var(--bg2)', flexShrink: 0 },
   inputRow:    { display: 'flex', gap: 10, alignItems: 'flex-end' },
   textarea:    { flex: 1, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', padding: '10px 14px', fontSize: 13, outline: 'none', resize: 'none', fontFamily: 'Noto Sans KR, sans-serif', lineHeight: 1.5, minHeight: 44, maxHeight: 140 },
@@ -49,6 +60,10 @@ const S: Record<string, CSSProperties> = {
   saveBtnOff:  { background: 'var(--bg3)', color: 'var(--text3)', cursor: 'not-allowed' },
   statusMsg:   { fontSize: 11, textAlign: 'center', padding: '4px 0', fontFamily: 'JetBrains Mono, monospace' },
   clearBtn:    { background: 'none', border: '1px solid var(--border)', color: 'var(--text3)', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer', fontFamily: 'JetBrains Mono, monospace' },
+  modeToggle:  { display: 'flex', background: 'var(--bg3)', borderRadius: 8, padding: 3, gap: 2 },
+  modeBtn:     { padding: '6px 14px', borderRadius: 6, border: 'none', background: 'transparent', color: 'var(--text3)', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif', transition: 'all 0.15s' },
+  modeBtnActiveControl: { background: 'rgba(88,166,255,0.15)', color: 'var(--accent)' },
+  modeBtnActiveDev:     { background: 'rgba(210,168,255,0.15)', color: '#D2A8FF' },
 };
 
 function bubbleStyle(role: 'user' | 'assistant'): CSSProperties {
@@ -62,17 +77,18 @@ function bubbleStyle(role: 'user' | 'assistant'): CSSProperties {
   };
 }
 
-function roleLabelStyle(role: 'user' | 'assistant'): CSSProperties {
+function roleLabelStyle(role: 'user' | 'assistant', mode: ChatMode): CSSProperties {
+  const assistantColor = mode === 'dev' ? '#D2A8FF' : 'var(--accent2)';
   return {
     fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase',
-    color: role === 'user' ? 'var(--accent)' : 'var(--accent2)',
+    color: role === 'user' ? 'var(--accent)' : assistantColor,
     fontFamily: 'JetBrains Mono, monospace', marginBottom: 4,
   };
 }
 
 const INIT_MESSAGE: Message = {
   role: 'assistant',
-  content: '안녕하세요. 프로젝트 상태나 다음 작업에 대해 물어보세요.\n맥락(dev_contexts)과 씨앗 상태(MindWorld)를 읽고 답합니다.',
+  content: '안녕하세요. 프로젝트 상태나 다음 작업에 대해 물어보세요.\n맥락(dev_contexts)과 씨앗 상태(MindWorld)를 읽고 답합니다.\n상단에서 관제/개발 모드를 전환할 수 있습니다.',
 };
 
 const EMPTY_DRAFT: ContextDraft = { last_task: '', summary: '', next_action: '', current_problems: '' };
@@ -97,21 +113,20 @@ export default function ChatPage() {
   const [hydrated, setHydrated]   = useState(false);
   const [input, setInput]         = useState('');
   const [loading, setLoading]     = useState(false);
+  const [mode, setMode]           = useState<ChatMode>('control');
   const [analyzing, setAnalyzing] = useState(false);
   const [saving, setSaving]       = useState(false);
   const [draft, setDraft]         = useState<ContextDraft>(EMPTY_DRAFT);
   const [hasDraft, setHasDraft]   = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
-  const [panelOpen, setPanelOpen] = useState(false); // 모바일 패널 토글
-  const [ownerKey, setOwnerKey]   = useState('');    // Phase 1: device_id 기반
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [ownerKey, setOwnerKey]   = useState('');
   const bottomRef    = useRef<HTMLDivElement>(null);
   const textareaRef  = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     setMessages(loadMessages());
     setHydrated(true);
-    // Phase 1: localStorage device_id → owner_key
-    // Identity Layer 완성 후 실제 owner_key로 교체
     let deviceId = localStorage.getItem('device_id');
     if (!deviceId) {
       deviceId = 'device_' + crypto.randomUUID();
@@ -138,23 +153,48 @@ export default function ChatPage() {
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = '44px';
     setLoading(true);
-    const history = nextMessages.slice(1).slice(-10).map((m) => ({ role: m.role, content: m.content }));
+
     try {
-      const res  = await fetch('/api/hajun?action=chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, history, owner_key: ownerKey }),
-      });
-      const json = await res.json();
-      if (json._error) {
-        setMessages(prev => [...prev, { role: 'assistant', content: `오류: ${json._error}` }]);
+      if (mode === 'control') {
+        const history = nextMessages.slice(1).slice(-10).map((m) => ({ role: m.role, content: m.content }));
+        const res  = await fetch('/api/hajun?action=chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg, history, owner_key: ownerKey }),
+        });
+        const json = await res.json();
+        if (json._error) {
+          setMessages(prev => [...prev, { role: 'assistant', content: `오류: ${json._error}` }]);
+        } else {
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: json.reply || '(응답 없음)',
+            observations: Array.isArray(json.observations) && json.observations.length > 0
+              ? json.observations : undefined,
+          }]);
+        }
       } else {
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: json.reply || '(응답 없음)',
-          observations: Array.isArray(json.observations) && json.observations.length > 0
-            ? json.observations : undefined,
-        }]);
+        // 개발 모드 — 여러 AI 취합
+        const res = await fetch('/api/hajun?action=dev_chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msg }),
+        });
+        const json = await res.json();
+        if (json._error) {
+          setMessages(prev => [...prev, { role: 'assistant', content: `오류: ${json._error}` }]);
+        } else {
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: json.reply || '(응답 없음)',
+            devMeta: {
+              bestSource: json.bestSource || '-',
+              judgedBy: json.judgedBy || '-',
+              participants: Array.isArray(json.participants) ? json.participants : [],
+              failed: Array.isArray(json.failed) ? json.failed : [],
+            },
+          }]);
+        }
       }
     } catch (e) {
       setMessages(prev => [...prev, { role: 'assistant', content: `네트워크 오류: ${e instanceof Error ? e.message : String(e)}` }]);
@@ -199,7 +239,7 @@ export default function ChatPage() {
     finally { setSaving(false); }
   };
 
-  // ── 맥락 갱신 패널 내용 (데스크톱/모바일 공용) ──────────
+  // ── 맥락 갱신 패널 내용 (관제/개발 공통) ──────────
   const PanelContent = () => (
     <div style={S.panelBody}>
       <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.6 }}>
@@ -245,6 +285,10 @@ export default function ChatPage() {
     </div>
   );
 
+  const headerSub = mode === 'control'
+    ? 'Groq(채팅) + Gemini(요약) · dev_contexts + MindWorld 기반'
+    : 'Groq + Gemini + NVIDIA 병렬 취합 · 매 요청 랜덤 심사위원';
+
   return (
     <div style={S.page}>
       <Sidebar />
@@ -253,11 +297,27 @@ export default function ChatPage() {
         <div style={S.header}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
             <div>
-              <div style={S.title}>🧠 HajunAI</div>
-              <div style={S.sub}>Groq(채팅) + Gemini(요약) · dev_contexts + MindWorld 기반</div>
+              <div style={S.title}>{mode === 'control' ? '🧠 HajunAI' : '🛠 HajunAI 개발'}</div>
+              <div style={S.sub}>{headerSub}</div>
             </div>
+
+            {/* 관제 / 개발 토글 */}
+            <div style={S.modeToggle}>
+              <button
+                style={{ ...S.modeBtn, ...(mode === 'control' ? S.modeBtnActiveControl : {}) }}
+                onClick={() => setMode('control')}
+              >
+                🧠 관제
+              </button>
+              <button
+                style={{ ...S.modeBtn, ...(mode === 'dev' ? S.modeBtnActiveDev : {}) }}
+                onClick={() => setMode('dev')}
+              >
+                🛠 개발
+              </button>
+            </div>
+
             <div style={{ display: 'flex', gap: 8 }}>
-              {/* 모바일 패널 토글 버튼 */}
               <button style={{ ...S.clearBtn, display: 'none' }}
                 className="panel-toggle-btn"
                 onClick={() => setPanelOpen(!panelOpen)}>
@@ -274,8 +334,11 @@ export default function ChatPage() {
             <div style={S.messages}>
               {messages.map((m, i) => (
                 <div key={i} style={bubbleStyle(m.role)}>
-                  <div style={roleLabelStyle(m.role)}>{m.role === 'user' ? '나' : 'HajunAI'}</div>
+                  <div style={roleLabelStyle(m.role, mode)}>
+                    {m.role === 'user' ? '나' : (mode === 'dev' && m.devMeta ? 'HajunAI 개발' : 'HajunAI')}
+                  </div>
                   <div style={S.text}>{m.content}</div>
+
                   {m.observations && m.observations.length > 0 && (
                     <div style={S.obsBox}>
                       <div style={S.obsLabel}>관찰</div>
@@ -286,16 +349,36 @@ export default function ChatPage() {
                       ))}
                     </div>
                   )}
+
+                  {m.devMeta && (
+                    <div style={S.devMetaBox}>
+                      <div style={S.devMetaLabel}>AI 취합 정보</div>
+                      <div style={S.devMetaItem}>채택: {m.devMeta.bestSource}</div>
+                      <div style={S.devMetaItem}>심사: {m.devMeta.judgedBy}</div>
+                      <div style={S.devMetaItem}>참여: {m.devMeta.participants.join(', ') || '-'}</div>
+                      {m.devMeta.failed.length > 0 && (
+                        <div style={{ ...S.devMetaItem, color: 'var(--warn)' }}>
+                          실패: {m.devMeta.failed.join(', ')}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
-              {loading && <div style={S.thinking}>HajunAI가 생각 중...</div>}
+              {loading && (
+                <div style={S.thinking}>
+                  {mode === 'control' ? 'HajunAI가 생각 중...' : 'Groq · Gemini · NVIDIA에 동시 질의 중...'}
+                </div>
+              )}
               <div ref={bottomRef} />
             </div>
 
             <div style={S.inputArea}>
               <div style={S.inputRow}>
                 <textarea ref={textareaRef} style={S.textarea}
-                  placeholder="질문을 입력하세요... (Enter 전송, Shift+Enter 줄바꿈)"
+                  placeholder={mode === 'control'
+                    ? '질문을 입력하세요... (Enter 전송, Shift+Enter 줄바꿈)'
+                    : '개발 문제를 입력하세요... 여러 AI가 답하고 취합됩니다'}
                   value={input} onChange={handleInput} onKeyDown={onKeyDown}
                   rows={1} disabled={loading} />
                 <button style={{ ...S.sendBtn, ...(loading || !input.trim() ? S.sendBtnOff : {}) }}
@@ -303,7 +386,11 @@ export default function ChatPage() {
                   전송
                 </button>
               </div>
-              <div style={S.hint}>대화는 브라우저에 저장됩니다 · 저장: hajunai_conversations</div>
+              <div style={S.hint}>
+                {mode === 'control'
+                  ? '대화는 브라우저에 저장됩니다 · 저장: hajunai_conversations'
+                  : '개발 모드는 대화 기록을 이어서 전달하지 않습니다 · 저장: hajunai_conversations (dev_chat)'}
+              </div>
             </div>
           </div>
 
@@ -316,7 +403,7 @@ export default function ChatPage() {
           </div>
         </div>
 
-        {/* 모바일 패널 — 하단 시트 */}
+        {/* 모바일 패널 */}
         {panelOpen && (
           <div className="mobile-panel">
             <div style={{ ...S.panelHeader, borderBottom: '1px solid var(--border)' }}>
