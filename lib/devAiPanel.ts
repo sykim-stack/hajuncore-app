@@ -1,77 +1,49 @@
 // lib/devAiPanel.ts
-// 개발 Chat: 여러 AI에게 같은 질문을 던지고 하준아이가 최적 답을 취합한다.
-// 공개용 아님 — 개인 개발 도구. 실패한 AI는 조용히 제외하고 나머지로 진행한다.
+// 개발 Chat: NVIDIA API 하나로 모델만 바꿔 병렬 호출, 하준아이가 취합한다.
+// Gemini/Groq 완전 배제 — 이 패널 전용 실험 구조 (다른 기능의 Gemini/Groq 사용과는 무관).
+// 심사위원은 Llama/Nemotron 중 랜덤 선정 (Codestral은 답변엔 참여하되 심사엔서 제외).
 
-const GROQ_KEY = process.env.GROQ_API_KEY!;
-const GEMINI_KEY = process.env.GEMINI_API_KEY!;
 const NVIDIA_KEY = process.env.NVIDIA_API_KEY!;
+const NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1/chat/completions';
 
 type AiResult = { name: string; text?: string; _error?: string };
 
-async function callGroq(prompt: string): Promise<AiResult> {
-  try {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 1200,
-      }),
-    });
-    if (!res.ok) return { name: 'Groq', _error: await res.text() };
-    const data = await res.json();
-    return { name: 'Groq', text: data.choices?.[0]?.message?.content || '' };
-  } catch (e) {
-    return { name: 'Groq', _error: e instanceof Error ? e.message : String(e) };
-  }
+const MODELS = {
+  llama: { id: 'meta/llama-3.3-70b-instruct', label: 'Llama-3.3' },
+  nemotron: { id: 'nvidia/llama-3.3-nemotron-super-49b-v1.5', label: 'Nemotron-Super' },
+  codestral: { id: 'mistralai/codestral-22b-instruct-v0.1', label: 'Codestral' },
+} as const;
+
+// 코드 관련 질문인지 간단 감지 — 감지되면 Codestral도 병렬 호출에 포함
+const CODE_KEYWORDS = [
+  '코드', '함수', '버그', '에러', '오류', '고쳐', '수정', '스크립트',
+  '구현', 'route', 'api', 'typescript', 'javascript', '파일', 'import',
+  '컴파일', '빌드', 'sql', '쿼리', '타입', '리팩터', '리팩토링',
+];
+
+function looksLikeCodeQuestion(message: string): boolean {
+  const lower = message.toLowerCase();
+  return CODE_KEYWORDS.some((k) => lower.includes(k.toLowerCase()));
 }
 
-async function callGemini(prompt: string): Promise<AiResult> {
+async function callNvidiaModel(prompt: string, modelId: string, label: string): Promise<AiResult> {
+  if (!NVIDIA_KEY) return { name: label, _error: 'NVIDIA_API_KEY 미설정' };
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 1200 },
-        }),
-      }
-    );
-    if (!res.ok) return { name: 'Gemini', _error: await res.text() };
-    const data = await res.json();
-    const parts = data.candidates?.[0]?.content?.parts || [];
-    const text = parts
-      .filter((p: { thought?: boolean; text?: string }) => !p.thought && typeof p.text === 'string')
-      .map((p: { text: string }) => p.text)
-      .join('');
-    return { name: 'Gemini', text };
-  } catch (e) {
-    return { name: 'Gemini', _error: e instanceof Error ? e.message : String(e) };
-  }
-}
-
-async function callNvidia(prompt: string): Promise<AiResult> {
-  if (!NVIDIA_KEY) return { name: 'NVIDIA', _error: 'NVIDIA_API_KEY 미설정' };
-  try {
-    const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+    const res = await fetch(NVIDIA_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${NVIDIA_KEY}` },
       body: JSON.stringify({
-        model: 'meta/llama-3.3-70b-instruct',
+        model: modelId,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
         max_tokens: 1200,
       }),
     });
-    if (!res.ok) return { name: 'NVIDIA', _error: await res.text() };
+    if (!res.ok) return { name: label, _error: await res.text() };
     const data = await res.json();
-    return { name: 'NVIDIA', text: data.choices?.[0]?.message?.content || '' };
+    return { name: label, text: data.choices?.[0]?.message?.content || '' };
   } catch (e) {
-    return { name: 'NVIDIA', _error: e instanceof Error ? e.message : String(e) };
+    return { name: label, _error: e instanceof Error ? e.message : String(e) };
   }
 }
 
@@ -81,13 +53,18 @@ export type DevChatResult = {
   judgedBy: string;
   participants: string[];
   failed: string[];
+  codeMode: boolean;
 };
 
 /**
- * 개발 질문을 Groq/Gemini/NVIDIA에 병렬로 던진다.
- * 심사위원은 매 요청마다 성공한 AI 중에서 랜덤으로 바뀐다 (고정 심사위원 없음 — Phase 0 실험 원칙).
+ * 개발 질문을 NVIDIA 모델들에 병렬로 던진다.
+ * - Llama, Nemotron: 항상 호출
+ * - Codestral: 코드 관련 질문일 때만 추가 호출
+ * - 심사위원: Llama/Nemotron 중 성공한 것에서만 랜덤 선정 (Codestral 제외)
  */
 export async function runDevChat(question: string, projectContext: string): Promise<DevChatResult> {
+  const codeMode = looksLikeCodeQuestion(question);
+
   const devPrompt = `당신은 개발 문제를 함께 고민하는 조언자입니다. 다음 프로젝트 맥락을 참고해 질문에 답하세요.
 
 프로젝트 맥락:
@@ -98,23 +75,41 @@ ${question}
 
 간결하고 실용적으로, 코드가 필요하면 코드로 답하세요.`;
 
-  const [groq, gemini, nvidia] = await Promise.all([
-    callGroq(devPrompt),
-    callGemini(devPrompt),
-    callNvidia(devPrompt),
-  ]);
+  const calls: Promise<AiResult>[] = [
+    callNvidiaModel(devPrompt, MODELS.llama.id, MODELS.llama.label),
+    callNvidiaModel(devPrompt, MODELS.nemotron.id, MODELS.nemotron.label),
+  ];
+  if (codeMode) {
+    calls.push(callNvidiaModel(devPrompt, MODELS.codestral.id, MODELS.codestral.label));
+  }
 
-  const results = [groq, gemini, nvidia];
+  const results = await Promise.all(calls);
   const succeeded = results.filter((r) => r.text && !r._error);
   const failed = results.filter((r) => r._error).map((r) => r.name);
 
   if (succeeded.length === 0) {
     return {
-      finalAnswer: '모든 AI 호출이 실패했습니다. API 키 상태를 확인해주세요.',
+      finalAnswer: '모든 AI 호출이 실패했습니다. NVIDIA_API_KEY 상태나 rate limit을 확인해주세요.',
       bestSource: 'none',
       judgedBy: 'none',
       participants: [],
       failed,
+      codeMode,
+    };
+  }
+
+  // 심사 후보 = Codestral 제외한 성공작들
+  const judgeCandidates = succeeded.filter((r) => r.name !== MODELS.codestral.label);
+
+  // 심사할 후보가 없는 경우 (Codestral만 성공한 극단 케이스) — 그대로 반환
+  if (judgeCandidates.length === 0) {
+    return {
+      finalAnswer: succeeded[0].text!,
+      bestSource: succeeded[0].name,
+      judgedBy: 'n/a (Codestral 단독 응답)',
+      participants: succeeded.map((r) => r.name),
+      failed,
+      codeMode,
     };
   }
 
@@ -125,23 +120,24 @@ ${question}
       judgedBy: 'n/a (단일 응답)',
       participants: [succeeded[0].name],
       failed,
+      codeMode,
     };
   }
 
-  // 심사위원 랜덤 선정 — 매번 다른 AI가 심사, 특정 AI 고정 편향 방지
-  const judgeIdx = Math.floor(Math.random() * succeeded.length);
-  const judge = succeeded[judgeIdx];
-  const judgeCaller = judge.name === 'Groq' ? callGroq : judge.name === 'NVIDIA' ? callNvidia : callGemini;
+  // 심사위원 랜덤 선정 (Llama 또는 Nemotron 중에서만)
+  const judgeIdx = Math.floor(Math.random() * judgeCandidates.length);
+  const judge = judgeCandidates[judgeIdx];
+  const judgeModelId = judge.name === MODELS.llama.label ? MODELS.llama.id : MODELS.nemotron.id;
 
   const judgePrompt = `다음은 같은 개발 질문에 대한 서로 다른 AI들의 답변입니다.
 가장 정확하고 실용적인 답을 고르거나, 필요하면 여러 답의 장점을 종합해 하나의 최종 답변을 작성하세요.
-출력은 JSON 한 줄만: {"final_answer": "...", "best_source": "Groq|Gemini|NVIDIA 중 가장 기여도가 큰 것"}
+출력은 JSON 한 줄만: {"final_answer": "...", "best_source": "답변 중 가장 기여도가 큰 모델명"}
 
 질문: ${question}
 
 ${succeeded.map((r) => `[${r.name}]\n${r.text}`).join('\n\n')}`;
 
-  const judgeResult = await judgeCaller(judgePrompt);
+  const judgeResult = await callNvidiaModel(judgePrompt, judgeModelId, judge.name);
   if (judgeResult.text) {
     try {
       const match = judgeResult.text.match(/\{[\s\S]*\}/);
@@ -153,6 +149,7 @@ ${succeeded.map((r) => `[${r.name}]\n${r.text}`).join('\n\n')}`;
           judgedBy: judge.name,
           participants: succeeded.map((r) => r.name),
           failed,
+          codeMode,
         };
       }
     } catch {
@@ -166,5 +163,6 @@ ${succeeded.map((r) => `[${r.name}]\n${r.text}`).join('\n\n')}`;
     judgedBy: judge.name,
     participants: succeeded.map((r) => r.name),
     failed,
+    codeMode,
   };
 }

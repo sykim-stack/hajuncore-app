@@ -547,6 +547,7 @@ ${mindWorldSummary}${workLogSection}${workLogSaveNote}`;
         judgedBy: result.judgedBy,
         participants: result.participants,
         failed: result.failed,
+        codeMode: result.codeMode,
         traceId,
       });
     }

@@ -14,6 +14,7 @@ type Message = {
     judgedBy: string;
     participants: string[];
     failed: string[];
+    codeMode?: boolean; // 추가
   };
 };
 
@@ -192,6 +193,7 @@ export default function ChatPage() {
               judgedBy: json.judgedBy || '-',
               participants: Array.isArray(json.participants) ? json.participants : [],
               failed: Array.isArray(json.failed) ? json.failed : [],
+              codeMode: !!json.codeMode, // 추가
             },
           }]);
         }
