@@ -10,6 +10,10 @@ const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
 const GEMINI_KEY  = process.env.GEMINI_API_KEY!;
 const GROQ_KEY    = process.env.GROQ_API_KEY!;
+// Groq는 llama-3.3-70b-versatile를 2026-08-16 종료했으므로
+// 모델 ID를 코드에 고정하지 않고 환경변수로 관리한다.
+const GROQ_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
+const GROQ_FALLBACK_MODEL = process.env.GROQ_FALLBACK_MODEL || 'openai/gpt-oss-20b';
 const HOUSE_ID    = '6341b872-4555-4fdc-8f1d-8009b2b1764f';
 const COREHUB_URL = process.env.COREHUB_URL || 'https://brainpool-corehub.vercel.app';
 
@@ -171,26 +175,42 @@ async function callGroq(
     ...history.map((h) => ({ role: h.role === 'user' ? 'user' : 'assistant', content: h.content })),
     { role: 'user', content: userMessage },
   ];
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${GROQ_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
-      messages,
-      temperature: 0.4,
-      max_tokens: 1024,
-    }),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    return { _error: `Groq API 오류: ${errText}` };
+  const models = [GROQ_MODEL, GROQ_FALLBACK_MODEL].filter((model, index, all) => all.indexOf(model) === index);
+  let lastError = '';
+
+  for (const model of models) {
+    try {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${GROQ_KEY}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: 0.4,
+          max_tokens: 2048,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const text = data.choices?.[0]?.message?.content || '';
+        if (text) return { text, model };
+        lastError = `${model}: 응답 본문 없음`;
+      } else {
+        const errText = await res.text();
+        lastError = `${model}: ${errText}`;
+        // 모델 폐기·접근 불가일 때만 다음 모델로 시도한다.
+        if (res.status !== 400 && res.status !== 404) break;
+      }
+    } catch (error) {
+      lastError = `${model}: ${error instanceof Error ? error.message : String(error)}`;
+      break;
+    }
   }
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content || '';
-  return { text };
+
+  return { _error: `Groq API 오류: ${lastError}` };
 }
 
 function parseReply(raw: string): { reply: string; observations: string[] } {
