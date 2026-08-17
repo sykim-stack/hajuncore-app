@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import Sidebar from '@/components/Sidebar';
 
+type ChatMode = 'control' | 'dev';
+
 type Message = {
   role: 'user' | 'assistant';
   content: string;
@@ -49,6 +51,8 @@ const S: Record<string, CSSProperties> = {
   saveBtnOff:  { background: 'var(--bg3)', color: 'var(--text3)', cursor: 'not-allowed' },
   statusMsg:   { fontSize: 11, textAlign: 'center', padding: '4px 0', fontFamily: 'JetBrains Mono, monospace' },
   clearBtn:    { background: 'none', border: '1px solid var(--border)', color: 'var(--text3)', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer', fontFamily: 'JetBrains Mono, monospace' },
+  modeSwitch:  { display: 'flex', gap: 2, padding: 3, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 7 },
+  modeBtn:     { border: 'none', borderRadius: 5, padding: '5px 9px', fontSize: 11, cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif', fontWeight: 700 },
 };
 
 function bubbleStyle(role: 'user' | 'assistant'): CSSProperties {
@@ -103,6 +107,7 @@ export default function ChatPage() {
   const [hasDraft, setHasDraft]   = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [panelOpen, setPanelOpen] = useState(false); // 모바일 패널 토글
+  const [mode, setMode]           = useState<ChatMode>('control');
   const [ownerKey, setOwnerKey]   = useState('');    // Phase 1: device_id 기반
   const bottomRef    = useRef<HTMLDivElement>(null);
   const textareaRef  = useRef<HTMLTextAreaElement>(null);
@@ -143,7 +148,7 @@ export default function ChatPage() {
       const res  = await fetch('/api/hajun?action=chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, history, owner_key: ownerKey }),
+        body: JSON.stringify({ message: msg, history, owner_key: ownerKey, mode }),
       });
       const json = await res.json();
       if (json._error) {
@@ -254,9 +259,22 @@ export default function ChatPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
             <div>
               <div style={S.title}>🧠 HajunAI</div>
-              <div style={S.sub}>Groq(채팅) + Gemini(요약) · dev_contexts + MindWorld 기반</div>
+              <div style={S.sub}>{mode === 'control' ? '관제 Chat · Context · 상태 · 기억' : '개발 Chat · AI 의견 의논 · 하준 관제 검사'}</div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
+              {/* 모바일 패널 토글 버튼 */}
+              <div style={S.modeSwitch} aria-label="채팅 모드 선택">
+                <button
+                  style={{ ...S.modeBtn, background: mode === 'control' ? 'var(--accent)' : 'transparent', color: mode === 'control' ? '#0D1117' : 'var(--text3)' }}
+                  onClick={() => setMode('control')}
+                  aria-pressed={mode === 'control'}
+                >관제</button>
+                <button
+                  style={{ ...S.modeBtn, background: mode === 'dev' ? 'var(--accent2)' : 'transparent', color: mode === 'dev' ? '#0D1117' : 'var(--text3)' }}
+                  onClick={() => setMode('dev')}
+                  aria-pressed={mode === 'dev'}
+                >개발</button>
+              </div>
               {/* 모바일 패널 토글 버튼 */}
               <button style={{ ...S.clearBtn, display: 'none' }}
                 className="panel-toggle-btn"
@@ -288,7 +306,11 @@ export default function ChatPage() {
                   )}
                 </div>
               ))}
-              {loading && <div style={S.thinking}>HajunAI가 생각 중...</div>}
+              {loading && (
+                <div style={S.thinking}>
+                  {mode === 'control' ? '관제 하준아이가 맥락을 확인 중...' : '개발 AI 의견과 하준 관제 기준을 확인 중...'}
+                </div>
+              )}
               <div ref={bottomRef} />
             </div>
 

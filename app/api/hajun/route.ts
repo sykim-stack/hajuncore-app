@@ -354,11 +354,13 @@ export async function POST(req: Request) {
     }
 
     if (resolvedAction === 'chat') {
-      const { message, history = [], owner_key = '' } = body as {
+      const { message, history = [], owner_key = '', mode = 'control' } = body as {
         message: string;
         history: Array<{ role: string; content: string }>;
         owner_key?: string;
+        mode?: 'control' | 'dev';
       };
+      const chatMode = mode === 'dev' ? 'dev' : 'control';
       if (!message || typeof message !== 'string' || message.trim() === '') {
         return Response.json({ _error: '메시지가 비어있습니다', traceId }, { status: 200 });
       }
@@ -373,11 +375,23 @@ export async function POST(req: Request) {
       const opportunitySection = opportunities.text
         ? `\n발견된 기회 (CoreHub Publish):\n${opportunities.text}\n이 기회들은 강요하지 말고, 대화 흐름에서 자연스럽게 언급할 것.`
         : '';
+      const modeInstruction = chatMode === 'dev'
+        ? `현재 모드: 개발 Chat
+- 여러 개발 AI와 의논하기 위한 질문으로 해석하세요.
+- 프로젝트 철학·Core 책임·기존 결정사항을 고려하되, 코드를 직접 확정하지 말고 검토용 제안으로 답하세요.
+- 원인, 대안, 트레이드오프, 검증 방법, 사람이 결정할 사항을 구분하세요.
+- 하준 관제는 검사관 역할이며 최종 결정권은 사람에게 있습니다.`
+        : `현재 모드: 관제 Chat
+- BRAINPOOL 전체 상태, 기억, Context, 현재 작업 흐름을 기준으로 답하세요.
+- 프로젝트의 상태와 다음에 확인할 사항을 정리하되, 사람 대신 결정을 확정하지 마세요.
+- 필요한 경우 관찰과 상태 변화 후보를 구분하세요.`;
       const systemPrompt = `당신은 HajunAI입니다. BRAINPOOL 프로젝트의 개인 전략 비서입니다.
 질문에 단순히 답하는 AI가 아니라, 프로젝트와 삶의 흐름을 이해하고
 현재 상태를 분석하여 다음에 필요한 것을 알려주는 비서입니다.
 
-규칙:
+${modeInstruction}
+
+공통 규칙:
 - 핵심만 간결하게 답하세요.
 - 마크다운 금지 (**, ##, - 목록 등 사용하지 말 것).
 - 한국어로만 답하세요.
@@ -408,7 +422,7 @@ ${mindWorldSummary}`;
         keywords: ['chat', 'hajunai'],
         ...(chatMeta && { meta: chatMeta }),
       });
-      return Response.json({ reply, observations, traceId });
+      return Response.json({ reply, observations, mode: chatMode, traceId });
     }
 
     if (resolvedAction === 'summarize_context') {
