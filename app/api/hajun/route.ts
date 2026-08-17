@@ -340,8 +340,10 @@ export async function POST(req: Request) {
   try {
     const rawBody = await req.text();
     const body = JSON.parse(rawBody.replace(/^\uFEFF/, ''));
+    // 구버전 프론트가 action 쿼리 없이 message를 보낼 때도 chat으로 호환한다.
+    const resolvedAction = action || (typeof body?.message === 'string' ? 'chat' : '');
 
-    if (action === 'update_context') {
+    if (resolvedAction === 'update_context') {
       const { id, ...fields } = body;
       if (!id) return Response.json({ _error: 'id 필요', traceId }, { status: 200 });
       const data = await supabasePatch('dev_contexts', id, {
@@ -351,7 +353,7 @@ export async function POST(req: Request) {
       return Response.json({ payload: data[0] || null, traceId });
     }
 
-    if (action === 'chat') {
+    if (resolvedAction === 'chat') {
       const { message, history = [], owner_key = '' } = body as {
         message: string;
         history: Array<{ role: string; content: string }>;
@@ -409,7 +411,7 @@ ${mindWorldSummary}`;
       return Response.json({ reply, observations, traceId });
     }
 
-    if (action === 'summarize_context') {
+    if (resolvedAction === 'summarize_context') {
       if (!GEMINI_KEY) {
         return Response.json({ _error: 'GEMINI_API_KEY 환경변수 미설정', traceId }, { status: 200 });
       }
@@ -599,7 +601,7 @@ ${mindWorldSummary}`;
       });
     }
 
-    return Response.json({ _error: '알 수 없는 action', traceId }, { status: 200 });
+    return Response.json({ _error: `알 수 없는 action: ${action || '(없음)'}`, traceId }, { status: 200 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return Response.json({ _error: msg, traceId }, { status: 500 });
