@@ -10,11 +10,11 @@ type Message = {
   content: string;
   observations?: string[];
   devMeta?: {
-    bestSource: string;
-    judgedBy: string;
-    participants: string[];
-    failed: string[];
-    codeMode?: boolean; // 추가
+  bestSource: string;
+  judgedBy: string;
+  participants: string[];
+  failed: string[];
+  rawResponses?: { name: string; text?: string; error?: string }[];
   };
 };
 
@@ -26,7 +26,6 @@ type ContextDraft = {
 };
 
 const STORAGE_KEY = 'hajunai_chat_messages';
-
 const S: Record<string, CSSProperties> = {
   page:        { display: 'flex', minHeight: '100vh', background: 'var(--bg)' },
   main:        { flex: 1, display: 'flex', flexDirection: 'column', maxHeight: '100vh', overflow: 'hidden', minWidth: 0 },
@@ -122,6 +121,7 @@ export default function ChatPage() {
   const [statusMsg, setStatusMsg] = useState('');
   const [panelOpen, setPanelOpen] = useState(false);
   const [ownerKey, setOwnerKey]   = useState('');
+  const [copied, setCopied]       = useState(false);
   const bottomRef    = useRef<HTMLDivElement>(null);
   const textareaRef  = useRef<HTMLTextAreaElement>(null);
 
@@ -144,7 +144,7 @@ export default function ChatPage() {
     ta.style.height = 'auto';
     ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
   };
-
+const [expandedRaw, setExpandedRaw] = useState<Record<number, boolean>>({});
   const send = async () => {
     const msg = input.trim();
     if (!msg || loading) return;
@@ -189,12 +189,12 @@ export default function ChatPage() {
             role: 'assistant',
             content: json.reply || '(응답 없음)',
             devMeta: {
-              bestSource: json.bestSource || '-',
-              judgedBy: json.judgedBy || '-',
-              participants: Array.isArray(json.participants) ? json.participants : [],
-              failed: Array.isArray(json.failed) ? json.failed : [],
-              codeMode: !!json.codeMode, // 추가
-            },
+            bestSource: json.bestSource || '-',
+            judgedBy: json.judgedBy || '-',
+            participants: Array.isArray(json.participants) ? json.participants : [],
+            failed: Array.isArray(json.failed) ? json.failed : [],
+            rawResponses: Array.isArray(json.rawResponses) ? json.rawResponses : [],
+          },
           }]);
         }
       }
@@ -208,7 +208,25 @@ export default function ChatPage() {
   };
 
   const clearChat = () => { setMessages([INIT_MESSAGE]); localStorage.removeItem(STORAGE_KEY); };
-
+const copyConversation = async () => {
+  const text = messages
+    .map((m) => {
+      const role = m.role === 'user' ? '나' : (m.devMeta ? 'HajunAI(개발)' : 'HajunAI');
+      let block = `[${role}]\n${m.content}`;
+      if (m.devMeta) {
+        block += `\n(채택: ${m.devMeta.bestSource} · 참여: ${m.devMeta.participants.join(', ')})`;
+      }
+      return block;
+    })
+    .join('\n\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  } catch {
+    // 클립보드 권한 실패 시 조용히 무시
+  }
+};
   const analyzeContext = async () => {
     setAnalyzing(true); setStatusMsg('');
     try {
@@ -326,6 +344,12 @@ export default function ChatPage() {
                 {panelOpen ? '✕ 패널' : '⚙ 맥락'}
               </button>
               <button style={S.clearBtn} onClick={clearChat}>대화 초기화</button>
+                            <button
+                style={{ ...S.clearBtn, ...(copied ? { color: 'var(--accent2)', borderColor: 'var(--accent2)' } : {}) }}
+                onClick={copyConversation}
+              >
+                {copied ? '✅ 복사됨' : '📋 대화 복사'}
+              </button>
             </div>
           </div>
         </div>
@@ -352,7 +376,7 @@ export default function ChatPage() {
                     </div>
                   )}
 
-                  {m.devMeta && (
+                                    {m.devMeta && (
                     <div style={S.devMetaBox}>
                       <div style={S.devMetaLabel}>AI 취합 정보</div>
                       <div style={S.devMetaItem}>채택: {m.devMeta.bestSource}</div>
@@ -362,6 +386,40 @@ export default function ChatPage() {
                         <div style={{ ...S.devMetaItem, color: 'var(--warn)' }}>
                           실패: {m.devMeta.failed.join(', ')}
                         </div>
+                      )}
+                      {m.devMeta.rawResponses && m.devMeta.rawResponses.length > 0 && (
+                        <>
+                          <button
+                            onClick={() => setExpandedRaw(prev => ({ ...prev, [i]: !prev[i] }))}
+                            style={{
+                              marginTop: 8, background: 'none', border: '1px solid rgba(210,168,255,0.3)',
+                              borderRadius: 6, color: '#D2A8FF', fontSize: 11, padding: '4px 10px',
+                              cursor: 'pointer', fontFamily: 'JetBrains Mono, monospace',
+                            }}
+                          >
+                            {expandedRaw[i] ? '▲ 개별 답변 접기' : '▼ 개별 답변 전체 보기'}
+                          </button>
+                          {expandedRaw[i] && (
+                            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                              {m.devMeta.rawResponses.map((r, j) => (
+                                <div key={j} style={{
+                                  padding: '8px 10px', background: 'var(--bg3)',
+                                  border: '1px solid var(--border)', borderRadius: 6,
+                                }}>
+                                  <div style={{
+                                    fontSize: 10, fontWeight: 700, color: r.error ? 'var(--warn)' : '#D2A8FF',
+                                    fontFamily: 'JetBrains Mono, monospace', marginBottom: 4,
+                                  }}>
+                                    {r.name}{r.error ? ' (실패)' : ''}
+                                  </div>
+                                  <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                                    {r.error || r.text}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   )}

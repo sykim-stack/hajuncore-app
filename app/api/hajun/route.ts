@@ -22,6 +22,8 @@ import {
   fetchRecentWorkLogs,
   buildWorkLogBlock,
 } from '@/lib/workLog';
+import { fetchContextSummary, fetchMindWorldSummary } from '@/lib/context';
+import { callGroq } from '@/lib/groq';
 import { runDevChat } from '@/lib/devAiPanel';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
@@ -87,26 +89,6 @@ function calcSnapshotConfidence(snapshot: Record<string, unknown>): number {
   return Math.min(conf, 0.90);
 }
 
-// ── MindWorld 최신 결과 ───────────────────────────────────────
-async function fetchMindWorldSummary(): Promise<string> {
-  try {
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/corenull_rooms?house_id=eq.${HOUSE_ID}&order=updated_at.desc&limit=5`,
-      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, cache: 'no-store' }
-    );
-    if (!res.ok) return '씨앗 데이터 없음';
-    const rooms = await res.json();
-    if (!rooms || rooms.length === 0) return '씨앗 데이터 없음';
-    return rooms
-      .map((r: { name?: string; fruit_state?: string; updated_at?: string }) =>
-        `- ${r.name || '이름없음'} (${r.fruit_state || 'unknown'}) | ${r.updated_at?.slice(0, 10) || ''}`
-      )
-      .join('\n');
-  } catch {
-    return '씨앗 데이터 조회 실패';
-  }
-}
-
 // ── CoreHub Opportunity 조회 (v1.2) ──────────────────────────
 // CoreHub Architecture v2.0: Publish된 Public Knowledge를 HajunAI가 소비
 async function fetchOpportunities(ownerKey: string): Promise<{
@@ -153,28 +135,6 @@ async function consumeOpportunities(ids: string[], outcome = 'shown'): Promise<v
   } catch { /* 소비 실패해도 응답은 반환 */ }
 }
 
-// ── dev_contexts 최신 1건 (chat 시스템 프롬프트용) ───────────
-// v1.1: contexts → dev_contexts (개발 핸드오프 전용 테이블)
-async function fetchContextSummary(): Promise<string> {
-  try {
-    const data = await supabaseGet('dev_contexts?order=updated_at.desc&limit=1');
-    if (!data || data.length === 0) return '개발 맥락 없음';
-    const c = data[0];
-    const parts: string[] = [];
-    if (c.phase)          parts.push(`페이즈: ${c.phase}`);
-    if (c.status)         parts.push(`상태: ${c.status}`);
-    if (c.last_task)      parts.push(`마지막 작업: ${c.last_task}`);
-    if (c.next_action)    parts.push(`다음 액션: ${c.next_action}`);
-    if (c.current_problems && c.current_problems !== '없음')
-                          parts.push(`현재 문제: ${c.current_problems}`);
-    if (c.summary)        parts.push(`요약: ${c.summary}`);
-    if (Array.isArray(c.next_tasks) && c.next_tasks.length > 0)
-      parts.push(`다음 작업:\n${c.next_tasks.map((t: string) => `  - ${t}`).join('\n')}`);
-    return parts.join('\n') || '맥락 데이터 파싱 실패';
-  } catch {
-    return '개발 맥락 조회 실패';
-  }
-}
 
 // ── 대화 저장 ─────────────────────────────────────────────────
 async function saveConversation(payload: {
@@ -196,42 +156,6 @@ async function saveConversation(payload: {
       body: JSON.stringify({ ...payload, created_at: new Date().toISOString() }),
     });
   } catch { /* 저장 실패해도 응답은 반환 */ }
-}
-
-// ── Groq 호출 (채팅용) ────────────────────────────────────────
-async function callGroq(
-  systemPrompt: string,
-  userMessage: string,
-  history: Array<{ role: string; content: string }>
-) {
-  const messages = [
-    { role: 'system', content: systemPrompt },
-    ...history.map((h) => ({ role: h.role === 'user' ? 'user' : 'assistant', content: h.content })),
-    { role: 'user', content: userMessage },
-  ];
-
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${GROQ_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
-      messages,
-      temperature: 0.4,
-      max_tokens: 1024,
-    }),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    return { _error: `Groq API 오류: ${errText}` };
-  }
-
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content || '';
-  return { text };
 }
 
 // ── Observations 파싱 ─────────────────────────────────────────
@@ -524,22 +448,14 @@ ${mindWorldSummary}${workLogSection}${workLogSaveNote}`;
 
       return Response.json({ reply, observations, traceId });
     }
-// ── dev_chat (Groq + Gemini + NVIDIA 취합) ─────────────────
+    // ── dev_chat (NVIDIA 3모델 + 관제 하준아이 취합) ────────────
     if (action === 'dev_chat') {
       const { message } = body as { message: string };
       if (!message || typeof message !== 'string' || message.trim() === '') {
         return Response.json({ _error: '메시지가 비어있습니다', traceId }, { status: 200 });
       }
 
-      const contextSummary = await fetchContextSummary();
-      const result = await runDevChat(message.trim(), contextSummary);
-
-      saveConversation({
-        source_ai: 'HajunAI-DevChat',
-        original_message: `[개발질문] ${message}\n[취합답변:${result.bestSource}] ${result.finalAnswer}`,
-        summary: result.finalAnswer.slice(0, 100),
-        keywords: ['dev_chat', 'multi_ai', ...result.participants.map((p) => p.toLowerCase())],
-      });
+      const result = await runDevChat(message.trim());
 
       return Response.json({
         reply: result.finalAnswer,
@@ -548,6 +464,7 @@ ${mindWorldSummary}${workLogSection}${workLogSaveNote}`;
         participants: result.participants,
         failed: result.failed,
         codeMode: result.codeMode,
+        rawResponses: result.rawResponses,
         traceId,
       });
     }
