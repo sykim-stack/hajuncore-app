@@ -19,7 +19,7 @@ export async function callGroq(
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
       body: JSON.stringify({
-        model: 'lib/groq.ts',
+        model: 'llama-3.3-70b-versatile',
         messages,
         temperature: 0.4,
         max_tokens: 1024,
