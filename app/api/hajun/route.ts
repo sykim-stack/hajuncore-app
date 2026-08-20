@@ -1,7 +1,7 @@
 // app/api/hajun/route.ts
 // BRAINPOOL 계약: throw 금지, _error 필드 사용, 200/500만
 // action: contexts | dev_contexts | snapshots | update_context | chat | summarize_context | context_package
-// 채팅: Groq (llama-3.3-70b-versatile) / 요약: Gemini 2.5 Flash
+// 채팅: Groq (openai/gpt-oss-120b) / 요약: Gemini 2.5 Flash
 //
 // v1.1 변경사항:
 // - GET  contexts      → 사람 이해용 contexts (understanding 등 새 구조)
@@ -448,14 +448,14 @@ ${mindWorldSummary}${workLogSection}${workLogSaveNote}`;
 
       return Response.json({ reply, observations, traceId });
     }
-    // ── dev_chat (NVIDIA 3모델 + 관제 하준아이 취합) ────────────
+        // ── dev_chat (NVIDIA 3모델 + 관제 하준아이 취합, hajun_rooms/posts 저장) ──
     if (action === 'dev_chat') {
       const { message } = body as { message: string };
       if (!message || typeof message !== 'string' || message.trim() === '') {
         return Response.json({ _error: '메시지가 비어있습니다', traceId }, { status: 200 });
       }
 
-      const result = await runDevChat(message.trim());
+      const result = await runDevChat(message.trim(), traceId);
 
       return Response.json({
         reply: result.finalAnswer,
@@ -468,6 +468,7 @@ ${mindWorldSummary}${workLogSection}${workLogSaveNote}`;
         traceId,
       });
     }
+
     // ── summarize_context (Gemini 2.5 Flash) ──────────────────
     if (action === 'summarize_context') {
       if (!GEMINI_KEY) {

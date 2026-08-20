@@ -1,3 +1,4 @@
+// app/chat/page.tsx
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
@@ -121,7 +122,7 @@ export default function ChatPage() {
   const [statusMsg, setStatusMsg] = useState('');
   const [panelOpen, setPanelOpen] = useState(false);
   const [ownerKey, setOwnerKey]   = useState('');
-  const [copied, setCopied]       = useState(false);
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);   // 추가
   const bottomRef    = useRef<HTMLDivElement>(null);
   const textareaRef  = useRef<HTMLTextAreaElement>(null);
 
@@ -208,25 +209,18 @@ const [expandedRaw, setExpandedRaw] = useState<Record<number, boolean>>({});
   };
 
   const clearChat = () => { setMessages([INIT_MESSAGE]); localStorage.removeItem(STORAGE_KEY); };
-const copyConversation = async () => {
-  const text = messages
-    .map((m) => {
-      const role = m.role === 'user' ? '나' : (m.devMeta ? 'HajunAI(개발)' : 'HajunAI');
-      let block = `[${role}]\n${m.content}`;
-      if (m.devMeta) {
-        block += `\n(채택: ${m.devMeta.bestSource} · 참여: ${m.devMeta.participants.join(', ')})`;
-      }
-      return block;
-    })
-    .join('\n\n');
-  try {
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  } catch {
-    // 클립보드 권한 실패 시 조용히 무시
-  }
-};
+
+  // 개별 답변 복사 함수 (추가)
+  const copyAnswer = async (msg: Message, idx: number) => {
+    try {
+      await navigator.clipboard.writeText(msg.content);
+      setCopiedIdx(idx);
+      setTimeout(() => setCopiedIdx(null), 1500);
+    } catch {
+      // 클립보드 권한 실패 시 조용히 무시
+    }
+  };
+
   const analyzeContext = async () => {
     setAnalyzing(true); setStatusMsg('');
     try {
@@ -344,12 +338,7 @@ const copyConversation = async () => {
                 {panelOpen ? '✕ 패널' : '⚙ 맥락'}
               </button>
               <button style={S.clearBtn} onClick={clearChat}>대화 초기화</button>
-                            <button
-                style={{ ...S.clearBtn, ...(copied ? { color: 'var(--accent2)', borderColor: 'var(--accent2)' } : {}) }}
-                onClick={copyConversation}
-              >
-                {copied ? '✅ 복사됨' : '📋 대화 복사'}
-              </button>
+              {/* 기존 "📋 대화 복사" 버튼 제거 */}
             </div>
           </div>
         </div>
@@ -376,7 +365,7 @@ const copyConversation = async () => {
                     </div>
                   )}
 
-                                    {m.devMeta && (
+                  {m.devMeta && (
                     <div style={S.devMetaBox}>
                       <div style={S.devMetaLabel}>AI 취합 정보</div>
                       <div style={S.devMetaItem}>채택: {m.devMeta.bestSource}</div>
@@ -422,6 +411,21 @@ const copyConversation = async () => {
                         </>
                       )}
                     </div>
+                  )}
+
+                  {/* 개별 복사 버튼 (assistant만) */}
+                  {m.role === 'assistant' && (
+                    <button
+                      onClick={() => copyAnswer(m, i)}
+                      style={{
+                        marginTop: 6, background: 'none', border: '1px solid var(--border)',
+                        borderRadius: 6, color: copiedIdx === i ? 'var(--accent2)' : 'var(--text3)',
+                        fontSize: 10, padding: '3px 8px', cursor: 'pointer',
+                        fontFamily: 'JetBrains Mono, monospace',
+                      }}
+                    >
+                      {copiedIdx === i ? '✅ 복사됨' : '📋 이 답변 복사'}
+                    </button>
                   )}
                 </div>
               ))}
