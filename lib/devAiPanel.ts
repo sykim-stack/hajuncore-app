@@ -2,12 +2,13 @@
 // 개발 Chat: NVIDIA 3모델(Llama/Nemotron/Codestral) + 관제 하준아이(Groq) 참여.
 // 심사위원은 Llama/Nemotron 중에서만 랜덤 선정 — Codestral, 관제 하준아이는 심사 후보 제외.
 // 모든 응답(채택 여부 무관)을 hajun_posts에 저장한다 (CoreNull "채택=보존 아님" 원칙).
+// 병렬 호출 → 직렬(순차) 호출로 변경, 요청 간 2초 대기, NVIDIA 타임아웃 60초, 지수 백오프 재시도 적용.
 
 import { callGroq } from '@/lib/groq';
 import { fetchContextSummary, fetchMindWorldSummary } from '@/lib/context';
 import { fetchLanguageKnowledge, buildLanguageKnowledgeBlock } from '@/lib/languageKnowledge';
 import { fetchRecentWorkLogs, buildWorkLogBlock } from '@/lib/workLog';
-import { resolveRoomId, saveHajunPosts, fetchCurrentPhase, type HajunPostInput } from '@/lib/hajunRooms';
+import { getEngineRoomId, classifyEngineRoom, saveHajunPosts, fetchCurrentPhase, type HajunPostInput } from '@/lib/hajunRooms';
 
 const NVIDIA_KEY = process.env.NVIDIA_API_KEY!;
 const NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1/chat/completions';
@@ -34,16 +35,25 @@ function looksLikeCodeQuestion(message: string): boolean {
   return CODE_KEYWORDS.some((k) => lower.includes(k.toLowerCase()));
 }
 
-async function callNvidiaModel(prompt: string, modelId: string, label: string, agent: string): Promise<AiResult> {
+// ---------- NVIDIA 호출 (타임아웃 60초, 지수 백오프 재시도) ----------
+async function callNvidiaModel(
+  prompt: string,
+  modelId: string,
+  label: string,
+  agent: string
+): Promise<AiResult> {
   if (!NVIDIA_KEY) return { name: label, agent, model: modelId, _error: 'NVIDIA_API_KEY 미설정' };
 
-  const attempt = async (): Promise<AiResult> => {
+  const attemptFetch = async (): Promise<AiResult> => {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 25000);
+    const timeout = setTimeout(() => controller.abort(), 60000); // 60초 타임아웃
     try {
       const res = await fetch(NVIDIA_ENDPOINT, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${NVIDIA_KEY}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${NVIDIA_KEY}`,
+        },
         body: JSON.stringify({
           model: modelId,
           messages: [{ role: 'user', content: prompt }],
@@ -53,23 +63,45 @@ async function callNvidiaModel(prompt: string, modelId: string, label: string, a
         signal: controller.signal,
       });
       clearTimeout(timeout);
-      if (!res.ok) return { name: label, agent, model: modelId, _error: await res.text() };
+      if (!res.ok) {
+        const errText = await res.text();
+        return { name: label, agent, model: modelId, _error: `HTTP ${res.status}: ${errText}` };
+      }
       const data = await res.json();
-      return { name: label, agent, model: modelId, text: data.choices?.[0]?.message?.content || '' };
+      const text = data.choices?.[0]?.message?.content || '';
+      return { name: label, agent, model: modelId, text };
     } catch (e) {
       clearTimeout(timeout);
       return { name: label, agent, model: modelId, _error: e instanceof Error ? e.message : String(e) };
     }
   };
 
-  const first = await attempt();
-  if (!first._error) return first;
+  // 지수 백오프: 2초 → 5초 (abort/fetch/timeout/ECONN... 만 재시도)
+  const delays = [2000, 5000];
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    const result = await attemptFetch();
+    if (!result._error) return result;
 
-  // 네트워크 레벨 실패(fetch failed, abort 등)면 한 번 재시도
-  await new Promise((r) => setTimeout(r, 800));
-  return attempt();
+    const errMsg = result._error.toLowerCase();
+    const isRetryable =
+      errMsg.includes('fetch') ||
+      errMsg.includes('abort') ||
+      errMsg.includes('timeout') ||
+      errMsg.includes('econnreset') ||
+      errMsg.includes('econnrefused');
+
+    if (isRetryable && attempt < delays.length) {
+      console.warn(`[NVIDIA] ${label} (${modelId}) 재시도 ${attempt + 1}/${delays.length}... (${delays[attempt]}ms 후)`);
+      await new Promise((r) => setTimeout(r, delays[attempt]));
+      continue;
+    }
+    return result;
+  }
+
+  return { name: label, agent, model: modelId, _error: 'Max retries exceeded' };
 }
 
+// ---------- Groq 참가자 (관제 하준아이) ----------
 async function buildGroqContextPrompt(): Promise<string> {
   const [contextSummary, mindWorldSummary, languageKnowledgeItems, recentWorkLogs] = await Promise.all([
     fetchContextSummary(),
@@ -116,6 +148,7 @@ async function callGroqParticipant(question: string): Promise<AiResult> {
   }
 }
 
+// ---------- 내부 타입 ----------
 export type RawResponse = { name: string; text?: string; error?: string };
 
 export type DevChatResult = {
@@ -128,6 +161,7 @@ export type DevChatResult = {
   rawResponses: RawResponse[];
 };
 
+// ---------- 메인 함수 (직렬 호출로 변경) ----------
 export async function runDevChat(question: string, questionRef: string): Promise<DevChatResult> {
   const codeMode = looksLikeCodeQuestion(question);
   const shallowContext = await fetchContextSummary();
@@ -142,22 +176,56 @@ ${question}
 
 간결하고 실용적으로, 코드가 필요하면 코드로 답하세요.`;
 
-  const calls: Promise<AiResult>[] = [
-    callNvidiaModel(devPrompt, MODELS.llama.id, MODELS.llama.label, MODELS.llama.agent),
-    callNvidiaModel(devPrompt, MODELS.nemotron.id, MODELS.nemotron.label, MODELS.nemotron.agent),
-    callGroqParticipant(question),
+  // ---------- 1. 실행할 태스크 정의 (순차 보장) ----------
+  const tasks: { fn: () => Promise<AiResult>; label: string }[] = [
+    {
+      fn: () => callNvidiaModel(devPrompt, MODELS.llama.id, MODELS.llama.label, MODELS.llama.agent),
+      label: MODELS.llama.label,
+    },
+    {
+      fn: () => callNvidiaModel(devPrompt, MODELS.nemotron.id, MODELS.nemotron.label, MODELS.nemotron.agent),
+      label: MODELS.nemotron.label,
+    },
+    {
+      fn: () => callGroqParticipant(question),
+      label: GROQ_LABEL,
+    },
   ];
+
+  // 코드 질문이면 Codestral 추가
   if (codeMode) {
-    calls.push(callNvidiaModel(devPrompt, MODELS.codestral.id, MODELS.codestral.label, MODELS.codestral.agent));
+    tasks.push({
+      fn: () => callNvidiaModel(devPrompt, MODELS.codestral.id, MODELS.codestral.label, MODELS.codestral.agent),
+      label: MODELS.codestral.label,
+    });
   }
 
-  const results = await Promise.all(calls);
-  const rawResponses: RawResponse[] = results.map((r) => ({ name: r.name, text: r.text, error: r._error }));
+  // ---------- 2. 순차 실행 (요청 간 2초 대기) ----------
+  const results: AiResult[] = [];
+  for (let i = 0; i < tasks.length; i++) {
+    const task = tasks[i];
+    if (i > 0) {
+      await new Promise((r) => setTimeout(r, 2000)); // 각 요청 사이 2초 대기 (Rate Limit 회피)
+    }
+    try {
+      const result = await task.fn();
+      results.push(result);
+    } catch (e) {
+      results.push({
+        name: task.label,
+        agent: 'unknown',
+        model: 'unknown',
+        _error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
 
+  // ---------- 3. 결과 분류 ----------
+  const rawResponses: RawResponse[] = results.map((r) => ({ name: r.name, text: r.text, error: r._error }));
   const succeeded = results.filter((r) => r.text && !r._error);
   const failed = results.filter((r) => r._error).map((r) => r.name);
 
-  // 심사 (Codestral, 관제하준아이 제외 — Llama/Nemotron만 후보)
+  // ---------- 4. 심사 (Llama/Nemotron만 후보) ----------
   const judgeCandidates = succeeded.filter(
     (r) => r.agent !== MODELS.codestral.agent && r.agent !== 'hajun_control'
   );
@@ -165,21 +233,23 @@ ${question}
   let finalAnswer: string;
   let bestSource: string;
   let judgedBy: string;
-  let judgeAgent: string | null = null;
 
   if (succeeded.length === 0) {
     finalAnswer = '모든 AI 호출이 실패했습니다. API 키 상태나 rate limit을 확인해주세요.';
-    bestSource = 'none'; judgedBy = 'none';
+    bestSource = 'none';
+    judgedBy = 'none';
   } else if (judgeCandidates.length === 0) {
-    finalAnswer = succeeded[0].text!; bestSource = succeeded[0].name;
+    finalAnswer = succeeded[0].text!;
+    bestSource = succeeded[0].name;
     judgedBy = 'n/a (Llama/Nemotron 모두 실패)';
   } else if (succeeded.length === 1) {
-    finalAnswer = succeeded[0].text!; bestSource = succeeded[0].name;
+    finalAnswer = succeeded[0].text!;
+    bestSource = succeeded[0].name;
     judgedBy = 'n/a (단일 응답)';
   } else {
+    // 랜덤 심사위원 선정
     const judgeIdx = Math.floor(Math.random() * judgeCandidates.length);
     const judge = judgeCandidates[judgeIdx];
-    judgeAgent = judge.agent;
     const judgeModelId = judge.agent === MODELS.llama.agent ? MODELS.llama.id : MODELS.nemotron.id;
 
     const judgePrompt = `다음은 같은 개발 질문에 대한 서로 다른 AI들의 답변입니다.
@@ -196,22 +266,24 @@ ${succeeded.map((r) => `[${r.name}]\n${r.text}`).join('\n\n')}`;
       try {
         const match = judgeResult.text.match(/\{[\s\S]*\}/);
         if (match) parsed = JSON.parse(match[0]);
-      } catch { /* fallback 아래에서 처리 */ }
+      } catch { /* fallback */ }
     }
     finalAnswer = parsed.final_answer || succeeded[0].text!;
     bestSource = parsed.best_source || succeeded[0].name;
     judgedBy = judge.name;
   }
 
-  // ── hajun_rooms/hajun_posts 저장 (실패해도 응답엔 영향 없음) ──
+   // ── hajun_posts 저장 (5개 엔진방 중 하나로 분류, project_ref는 Context 축) ──
   try {
-    const phase = await fetchCurrentPhase();
-    const roomId = await resolveRoomId(phase);
+    const room = classifyEngineRoom(question);
+    const roomId = await getEngineRoomId(room);
+    const projectRef = await fetchCurrentPhase();
     if (roomId) {
       const posts: HajunPostInput[] = results
-        .filter((r) => r.text) // 성공한 것만 저장 (실패는 에러 텍스트라 Post로 안 남김)
+        .filter((r) => r.text)
         .map((r) => ({
           room_id: roomId,
+          project_ref: projectRef,
           author_agent: r.agent,
           model_used: r.model,
           content: r.text!,

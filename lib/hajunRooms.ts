@@ -1,15 +1,16 @@
 // lib/hajunRooms.ts
-// HajunAI 개발 공간 — CoreNull room+post 패턴 적용 (Owner: HajunAI)
-// 원칙: Room=주제(모델 무관, 오래 유지), author_agent=슬롯 정체성(모델 아님),
-//       model_used=실제 엔진(교체 가능), adopted=채택여부(보존여부와 무관, 전부 저장)
+// HajunAI 공간·메시지 아키텍처 v1.0 — 개발마당 5개 엔진방(고정)
+// 방=엔진 책임 영역(CoreNull/CoreChat/CoreRing/CoreHub/Hajun), 프로젝트는 Context 축(project_ref)일 뿐 방 정체성 아님.
+// 관제마당은 범위 밖 (의미 View는 사람 승인 필요, 아직 없음).
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
 
-const FALLBACK_ROOM_NAME = 'HajunAI 개발';
+export type EngineRoom = 'CoreNull' | 'CoreChat' | 'CoreRing' | 'CoreHub' | 'Hajun';
 
 export type HajunPostInput = {
   room_id: string;
+  project_ref?: string | null;
   author_agent: string;
   model_used?: string;
   content: string;
@@ -17,57 +18,41 @@ export type HajunPostInput = {
   question_ref: string;
 };
 
-/**
- * dev_contexts.phase를 이름으로 하는 Room을 찾거나 생성한다.
- * phase가 없으면 "HajunAI 개발"로 fallback.
- */
-export async function resolveRoomId(phaseName: string | null): Promise<string | null> {
-  const roomName = (phaseName && phaseName.trim()) || FALLBACK_ROOM_NAME;
+const roomIdCache = new Map<EngineRoom, string>();
 
+/**
+ * 엔진방 이름으로 room_id를 가져온다. 5개 고정 방이라 캐싱해서 매번 조회하지 않는다.
+ */
+export async function getEngineRoomId(room: EngineRoom): Promise<string | null> {
+  if (roomIdCache.has(room)) return roomIdCache.get(room)!;
   try {
-    // 1. 기존 Room 조회
-    const getRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/hajun_rooms?name=eq.${encodeURIComponent(roomName)}&limit=1`,
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/hajun_rooms?name=eq.${encodeURIComponent(room)}&limit=1`,
       { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, cache: 'no-store' }
     );
-    if (getRes.ok) {
-      const existing = await getRes.json();
-      if (existing && existing.length > 0) return existing[0].id;
-    }
-
-    // 2. 없으면 생성
-    const createRes = await fetch(`${SUPABASE_URL}/rest/v1/hajun_rooms`, {
-      method: 'POST',
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json',
-        Prefer: 'return=representation',
-      },
-      body: JSON.stringify({ name: roomName }),
-    });
-    if (!createRes.ok) {
-      // unique 제약 충돌(동시 요청으로 이미 생성됐을 수 있음) — 다시 조회 시도
-      const retryRes = await fetch(
-        `${SUPABASE_URL}/rest/v1/hajun_rooms?name=eq.${encodeURIComponent(roomName)}&limit=1`,
-        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, cache: 'no-store' }
-      );
-      if (retryRes.ok) {
-        const retried = await retryRes.json();
-        if (retried && retried.length > 0) return retried[0].id;
-      }
-      return null;
-    }
-    const created = await createRes.json();
-    return created[0]?.id || null;
+    if (!res.ok) return null;
+    const data = await res.json();
+    const id = data?.[0]?.id;
+    if (id) roomIdCache.set(room, id);
+    return id || null;
   } catch {
     return null;
   }
 }
 
 /**
- * 여러 post를 한 번에 저장한다. 실패해도 조용히 무시 (채팅 흐름을 막지 않음).
+ * 질문 내용을 보고 5개 엔진방 중 하나로 분류한다.
+ * 키워드 매칭 우선, 애매하면 'Hajun'(기본값)으로.
  */
+export function classifyEngineRoom(question: string): EngineRoom {
+  const q = question.toLowerCase();
+  if (/corenull|코어널|씨앗|seed|하우스|house|마당|거실|서재/.test(q)) return 'CoreNull';
+  if (/corechat|코어챗|대화\s*흐름|세션|상호작용/.test(q)) return 'CoreChat';
+  if (/corering|코어링|번역|language_knowledge|tp_lexicon|dialect|stt|발음/.test(q)) return 'CoreRing';
+  if (/corehub|코어헙|취합|연결|opportunity|score|점수/.test(q)) return 'CoreHub';
+  return 'Hajun'; // 기본값: 이해·기억·Context·관제 보조
+}
+
 export async function saveHajunPosts(posts: HajunPostInput[]): Promise<void> {
   if (posts.length === 0) return;
   try {
@@ -82,13 +67,10 @@ export async function saveHajunPosts(posts: HajunPostInput[]): Promise<void> {
       body: JSON.stringify(posts),
     });
   } catch {
-    // 저장 실패해도 응답 흐름은 막지 않음
+    // 저장 실패해도 채팅 흐름은 유지
   }
 }
 
-/**
- * dev_contexts에서 현재 phase만 가볍게 조회 (Room 매칭용).
- */
 export async function fetchCurrentPhase(): Promise<string | null> {
   try {
     const res = await fetch(
