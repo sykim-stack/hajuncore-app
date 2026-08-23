@@ -25,6 +25,7 @@ import {
 import { fetchContextSummary, fetchMindWorldSummary } from '@/lib/context';
 import { callGroq } from '@/lib/groq';
 import { runDevChat } from '@/lib/devAiPanel';
+import { buildRoomContextPackage, type EngineRoom } from '@/lib/hajunRooms';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
@@ -321,7 +322,32 @@ ${docsContent}
         }
       });
     }
+// ── room_context: Room Context Package 4단계 ──────────────
+    // GET /api/hajun?action=room_context&room=CoreNull&limit=20
+    // hajun_posts를 원본으로 읽어 방별 Context View(가공본)를 반환한다. 저장하지 않는다.
+    if (action === 'room_context') {
+      const roomParam = searchParams.get('room') as EngineRoom | null;
+      const validRooms: EngineRoom[] = ['CoreNull', 'CoreChat', 'CoreRing', 'CoreHub', 'Hajun'];
 
+      if (!roomParam || !validRooms.includes(roomParam)) {
+        return Response.json(
+          { _error: 'room 파라미터 필요 (CoreNull|CoreChat|CoreRing|CoreHub|Hajun)', traceId: createTraceId() },
+          { status: 200 }
+        );
+      }
+
+      const limitParam = searchParams.get('limit');
+      const limit = limitParam ? Number(limitParam) : undefined;
+
+      const pkg = await buildRoomContextPackage(roomParam, { limit });
+
+      if ('_error' in pkg) {
+        return Response.json({ _error: pkg._error, traceId: createTraceId() }, { status: 200 });
+      }
+
+      return Response.json({ ...pkg, traceId: createTraceId() });
+    }
+    
     return Response.json({ _error: '알 수 없는 action' }, { status: 200 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
