@@ -3,11 +3,15 @@
 // 방=엔진 책임 영역(CoreNull/CoreChat/CoreRing/CoreHub/Hajun), 프로젝트는 Context 축(project_ref)일 뿐 방 정체성 아님.
 // 관제마당은 범위 밖 (의미 View는 사람 승인 필요, 아직 없음).
 //
-// v1.1 추가: Room Context Package 4단계
-// - hajun_posts는 원본 메시지로만 유지, 재저장하지 않는다.
-// - buildRoomContextPackage(roomType)는 원본을 읽어 방별 Context View로 가공만 한다.
-// - adopted=true는 "보존 여부"가 아니라 "그 시점 취합 결과에서 채택됨"이므로
-//   prior_decisions로 활용하되, adopted=false 응답도 recent_messages에는 그대로 포함한다.
+// v1.1: Room Context Package 4단계 (buildRoomContextPackage)
+//
+// v1.2: adopted ≠ decision 원칙 확정 (2026-08-23)
+// - adopted = 이번 AI 라운드에서 심사 AI가 선택한 답. 사람 검증 아님. 헐루시네이션 가능.
+// - confirmed_by_human = 사람이 검토하고 프로젝트 결정으로 확정한 것만 true.
+// - prior_adopted_answers: adopted 기반, "AI가 과거에 뽑았던 답" 참고용 기록일 뿐.
+// - prior_decisions: confirmed_by_human 기반. 아직 확정 UI/API가 없으므로 대부분 빈 배열이 정상이다.
+//   adopted를 prior_decisions로 자동 승격하지 않는다 — 이걸 하면 AI 라운드 승자가
+//   검증 없이 다음 AI들의 "프로젝트 역사"로 주입되는 오염 루프가 생긴다.
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
@@ -22,11 +26,15 @@ export type HajunPostInput = {
   content: string;
   adopted: boolean;
   question_ref: string;
+  // v1.2: 저장 시점에는 항상 비워둔다. 사람이 별도 확정 절차를 거쳐야만 채워진다.
+  confirmed_by_human?: boolean;
 };
 
 type HajunPostRow = HajunPostInput & {
   id?: string;
   created_at?: string;
+  confirmed_at?: string | null;
+  confirmed_by?: string | null;
 };
 
 const roomIdCache = new Map<EngineRoom, string>();
@@ -64,6 +72,10 @@ export function classifyEngineRoom(question: string): EngineRoom {
   return 'Hajun'; // 기본값: 이해·기억·Context·관제 보조
 }
 
+/**
+ * AI 응답들을 원본으로 저장한다. adopted는 그대로 저장하되,
+ * confirmed_by_human은 절대 여기서 채우지 않는다 (기본값 false 유지).
+ */
 export async function saveHajunPosts(posts: HajunPostInput[]): Promise<void> {
   if (posts.length === 0) return;
   try {
@@ -75,6 +87,7 @@ export async function saveHajunPosts(posts: HajunPostInput[]): Promise<void> {
         'Content-Type': 'application/json',
         Prefer: 'return=minimal',
       },
+      // confirmed_by_human을 명시적으로 포함하지 않는다 — DB 기본값(false)에 맡긴다.
       body: JSON.stringify(posts),
     });
   } catch {
@@ -111,6 +124,7 @@ export type RoomContextMessage = {
   model_used?: string;
   content: string;
   adopted: boolean;
+  confirmed_by_human: boolean;
   question_ref: string;
   created_at?: string;
 };
@@ -131,6 +145,9 @@ export type RoomContextPackage = {
   context: {
     project_ref: string | null;
     recent_messages: RoomContextMessage[];
+    // v1.2: AI 라운드 승자 기록. "결정"이 아니라 "참고용 과거 채택 답변"이다.
+    prior_adopted_answers: string[];
+    // v1.2: 사람이 실제로 확정한 프로젝트 결정. 확정 절차가 없으면 비어있는 게 정상.
     prior_decisions: string[];
   };
   participants: RoomContextParticipant[];
@@ -142,7 +159,9 @@ export type RoomContextResult = RoomContextPackage | { _error: string };
  * 5개 고정 엔진방 중 하나의 hajun_posts를 원본으로 읽어 Context Package(View)를 만든다.
  * - hajun_posts를 재저장하지 않는다. 순수 조회 + 가공만 한다.
  * - recent_messages: 최신 limit개를 시간순(오래된 것 먼저)으로 정렬해 반환한다.
- * - prior_decisions: adopted=true였던 응답들 (그 시점 취합 결과의 채택 답변).
+ * - prior_adopted_answers: adopted=true였던 응답들 — AI 라운드 승자 기록일 뿐, 검증된 사실 아님.
+ * - prior_decisions: confirmed_by_human=true인 것만 — 사람이 실제로 확정한 프로젝트 결정.
+ *   adopted를 여기로 자동 승격하지 않는다 (오염 루프 방지).
  * - participants: author_agent/model_used 조합별 발언 횟수 집계.
  */
 export async function buildRoomContextPackage(
@@ -179,14 +198,23 @@ export async function buildRoomContextPackage(
     model_used: p.model_used,
     content: p.content,
     adopted: p.adopted,
+    confirmed_by_human: p.confirmed_by_human === true,
     question_ref: p.question_ref,
     created_at: p.created_at,
   }));
 
-  const prior_decisions = chronological
+  // AI 라운드 승자 기록 — 참고용. "결정"이라 부르지 않는다.
+  const prior_adopted_answers = chronological
     .filter((p) => p.adopted)
     .map((p) => p.content)
-    .slice(-5); // 최근 채택 답변 5개까지
+    .slice(-5);
+
+  // 사람이 실제로 확정한 것만. confirmed_by_human을 채우는 API가 아직 없으므로
+  // 지금은 대부분 빈 배열이 정상 — 이게 오염을 막고 있다는 증거다.
+  const prior_decisions = chronological
+    .filter((p) => p.confirmed_by_human === true)
+    .map((p) => p.content)
+    .slice(-5);
 
   const participantMap = new Map<string, RoomContextParticipant>();
   for (const p of posts) {
@@ -213,6 +241,7 @@ export async function buildRoomContextPackage(
     context: {
       project_ref: projectRef,
       recent_messages,
+      prior_adopted_answers,
       prior_decisions,
     },
     participants: Array.from(participantMap.values()),
