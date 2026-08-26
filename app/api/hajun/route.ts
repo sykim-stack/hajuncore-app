@@ -164,7 +164,7 @@ async function saveConversation(payload: {
   summary: string;
   keywords: string[];
   meta?: Record<string, unknown>;
-}) {
+}): Promise<void> {
   try {
     await fetch(`${SUPABASE_URL}/rest/v1/hajunai_conversations`, {
       method: 'POST',
@@ -177,6 +177,39 @@ async function saveConversation(payload: {
       body: JSON.stringify({ ...payload, created_at: new Date().toISOString() }),
     });
   } catch { /* 저장 실패해도 응답은 반환 */ }
+}
+
+type ConversationEvent = {
+  id?: string;
+  source_ai?: string;
+  original_message?: string;
+  created_at?: string;
+};
+
+// 최근 개발·관제 채팅 원문을 다음 관제 요청의 Context View로 읽는다.
+// 원문을 요약·판정·변환해 저장하지 않으며, DB 원문은 그대로 보존한다.
+async function fetchRecentConversationEvents(limit = 3): Promise<ConversationEvent[]> {
+  const data = await supabaseGet(
+    `hajunai_conversations?source_ai=in.(HajunAI,HajunAI-DevChat)&order=created_at.desc&limit=${limit}` +
+    '&select=id,source_ai,original_message,created_at'
+  );
+  return Array.isArray(data) ? data as ConversationEvent[] : [];
+}
+
+function buildConversationEventBlock(events: ConversationEvent[]): string {
+  if (events.length === 0) return '이전 대화 원문 없음';
+
+  return events
+    .slice()
+    .reverse()
+    .map((event) => {
+      const id = event.id || 'id 없음';
+      const source = event.source_ai || '출처 없음';
+      const when = event.created_at || '시각 없음';
+      const raw = event.original_message || '(원문 없음)';
+      return `[원문 대화 사건 | ${source} | ${when} | ${id}]\n${raw}`;
+    })
+    .join('\n\n');
 }
 
 // ── Observations 파싱 ─────────────────────────────────────────
@@ -414,14 +447,16 @@ export async function POST(req: Request) {
       const trimmedMessage = message.trim();
 
       // CoreHub + Language Knowledge + Work Log 병렬 조회
-      const [contextSummary, mindWorldSummary, opportunities, languageKnowledgeItems, recentWorkLogs] =
+      const [contextSummary, mindWorldSummary, opportunities, languageKnowledgeItems, recentWorkLogs, recentConversationEvents] =
         await Promise.all([
           fetchContextSummary(),
           fetchMindWorldSummary(),
           fetchOpportunities(owner_key),
           fetchLanguageKnowledge({ text: trimmedMessage, limit: 3 }),
           fetchRecentWorkLogs(5),
+          fetchRecentConversationEvents(),
         ]);
+      const conversationEventBlock = buildConversationEventBlock(recentConversationEvents);
 
       // 완료 신호 감지 — 키워드 통과 시에만 Gemini 2차 확인 (비용 절약)
       let workLogSaveNote = '';
@@ -467,10 +502,20 @@ export async function POST(req: Request) {
 ${contextSummary}
 
 현재 씨앗/공간 상태 (MindWorld):
-${mindWorldSummary}${workLogSection}${workLogSaveNote}`;
+${mindWorldSummary}${workLogSection}${workLogSaveNote}
+
+이전 대화 원문 (Context View — 원문을 바꾸거나 정답·결정으로 취급하지 말 것):
+${conversationEventBlock}`;
 
       const groqResult = await callGroq(systemPrompt, trimmedMessage, history);
       if (groqResult._error) {
+        await saveConversation({
+          source_ai: 'HajunAI',
+          original_message: `[사용자] ${message}\n[HajunAI 오류] ${groqResult._error}`,
+          summary: groqResult._error.slice(0, 100),
+          keywords: ['chat', 'hajunai', 'error'],
+          meta: { trace_id: traceId, event_kind: 'chat_error' },
+        });
         return Response.json({ _error: groqResult._error, traceId }, { status: 200 });
       }
 
@@ -484,12 +529,12 @@ ${mindWorldSummary}${workLogSection}${workLogSaveNote}`;
         ? { opportunity_ids: opportunities.ids, used_at: new Date().toISOString(), trace_id: traceId }
         : undefined;
 
-      saveConversation({
+      await saveConversation({
         source_ai: 'HajunAI',
         original_message: `[사용자] ${message}\n[HajunAI] ${reply}`,
         summary: reply.slice(0, 100),
         keywords: ['chat', 'hajunai'],
-        ...(chatMeta && { meta: chatMeta }),
+        meta: { trace_id: traceId, event_kind: 'chat_round', ...(chatMeta || {}) },
       });
 
       return Response.json({ reply, observations, traceId });
