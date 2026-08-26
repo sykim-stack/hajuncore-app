@@ -20,14 +20,22 @@ import { fetchLanguageKnowledge, buildLanguageKnowledgeBlock } from '@/lib/langu
 import { fetchRecentWorkLogs, buildWorkLogBlock } from '@/lib/workLog';
 import { getEngineRoomId, classifyEngineRoom, saveHajunPosts, fetchCurrentPhase, type HajunPostInput } from '@/lib/hajunRooms';
 import { GROUND_TRUTH_BLOCK } from '@/lib/groundTruth';
+import { supabaseGet } from '@/lib/supabase';
 
 const NVIDIA_KEY = process.env.NVIDIA_API_KEY!;
 const NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1/chat/completions';
 
 const GROQ_LABEL = '🧠 관제 하준아이 (Context Baseline)';
 const GROQ_MODEL_USED = 'openai/gpt-oss-120b'; // lib/groq.ts와 동일하게 유지 필요
+const SUPABASE_URL = process.env.SUPABASE_URL!;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
 
 type AiResult = { name: string; agent: string; model: string; text?: string; _error?: string };
+type DevChatEvent = {
+  id?: string;
+  original_message?: string;
+  created_at?: string;
+};
 
 const MODELS = {
   nemotron: { id: 'nvidia/llama-3.3-nemotron-super-49b-v1.5', label: 'Nemotron-Super', agent: 'nvidia_nemotron' },
@@ -111,8 +119,71 @@ async function callNvidiaModel(
   return { name: label, agent, model: modelId, _error: 'Max retries exceeded' };
 }
 
+// ---------- 이전 개발 채팅 원문 재참조 ----------
+// 원문은 hajunai_conversations에 별도 사건으로 보존한다. 이 함수는 그 원문을
+// 다음 개발 요청의 Context View로 읽을 뿐, 요약·판정·변환해 저장하지 않는다.
+async function fetchRecentDevChatEvents(limit = 3): Promise<DevChatEvent[]> {
+  const data = await supabaseGet(
+    `hajunai_conversations?source_ai=eq.HajunAI-DevChat&order=created_at.desc&limit=${limit}` +
+    '&select=id,original_message,created_at'
+  );
+  return Array.isArray(data) ? data as DevChatEvent[] : [];
+}
+
+function buildDevChatEventBlock(events: DevChatEvent[]): string {
+  if (events.length === 0) return '이전 개발 채팅 원문 없음';
+
+  return events
+    .slice()
+    .reverse()
+    .map((event) => {
+      const id = event.id || 'id 없음';
+      const when = event.created_at || '시각 없음';
+      const raw = event.original_message || '(원문 없음)';
+      return `[원문 개발 채팅 사건 | ${when} | ${id}]\n${raw}`;
+    })
+    .join('\n\n');
+}
+
+async function saveDevChatEvent(payload: {
+  question: string;
+  traceId: string;
+  responses: RawResponse[];
+}): Promise<void> {
+  const responseBlock = payload.responses
+    .map((response) => {
+      const body = response.error || response.text || '(빈 응답)';
+      return `[${response.name}]\n${body}`;
+    })
+    .join('\n\n');
+
+  const originalMessage = `[개발 채팅 질문]\n${payload.question}\n\n[AI 응답·오류 원문]\n${responseBlock}`;
+
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/hajunai_conversations`, {
+      method: 'POST',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({
+        source_ai: 'HajunAI-DevChat',
+        original_message: originalMessage,
+        summary: payload.question.slice(0, 100),
+        keywords: ['dev_chat', 'raw'],
+        meta: { trace_id: payload.traceId, event_kind: 'dev_chat_round' },
+        created_at: new Date().toISOString(),
+      }),
+    });
+  } catch {
+    // 저장 실패도 하나의 응답 경계다. 채팅 자체는 계속 반환한다.
+  }
+}
+
 // ---------- Groq 참가자 (관제 하준아이) ----------
-async function buildGroqContextPrompt(): Promise<string> {
+async function buildGroqContextPrompt(devChatEventBlock: string): Promise<string> {
   const [contextSummary, mindWorldSummary, languageKnowledgeItems, recentWorkLogs] = await Promise.all([
     fetchContextSummary(),
     fetchMindWorldSummary(),
@@ -144,12 +215,15 @@ ${mindWorldSummary}
 ${lkBlock}
 
 최근 작업 기록:
-${buildWorkLogBlock(recentWorkLogs)}`;
+${buildWorkLogBlock(recentWorkLogs)}
+
+이전 개발 채팅 원문 (Context View — 원문을 바꾸거나 정답으로 취급하지 말 것):
+${devChatEventBlock}`;
 }
 
-async function callGroqParticipant(question: string): Promise<AiResult> {
+async function callGroqParticipant(question: string, devChatEventBlock: string): Promise<AiResult> {
   try {
-    const systemPrompt = await buildGroqContextPrompt();
+    const systemPrompt = await buildGroqContextPrompt(devChatEventBlock);
     const result = await callGroq(systemPrompt, question, []);
     if (result._error) return { name: GROQ_LABEL, agent: 'hajun_control', model: GROQ_MODEL_USED, _error: result._error };
     return { name: GROQ_LABEL, agent: 'hajun_control', model: GROQ_MODEL_USED, text: result.text };
@@ -174,7 +248,11 @@ export type DevChatResult = {
 // ---------- 메인 함수 (직렬 호출) ----------
 export async function runDevChat(question: string, questionRef: string): Promise<DevChatResult> {
   const codeMode = looksLikeCodeQuestion(question);
-  const shallowContext = await fetchContextSummary();
+  const [shallowContext, recentDevChatEvents] = await Promise.all([
+    fetchContextSummary(),
+    fetchRecentDevChatEvents(),
+  ]);
+  const devChatEventBlock = buildDevChatEventBlock(recentDevChatEvents);
 
   const devPrompt = `당신은 개발 문제를 함께 고민하는 조언자입니다. 다음 프로젝트 맥락을 참고해 질문에 답하세요.
 
@@ -189,6 +267,9 @@ ${GROUND_TRUTH_BLOCK}
 프로젝트 맥락:
 ${shallowContext}
 
+이전 개발 채팅 원문 (Context View — 원문을 바꾸거나 정답으로 취급하지 말 것):
+${devChatEventBlock}
+
 질문:
 ${question}
 
@@ -202,7 +283,7 @@ API는 절대 만들어내지 마세요.`;
       label: MODELS.nemotron.label,
     },
     {
-      fn: () => callGroqParticipant(question),
+      fn: () => callGroqParticipant(question, devChatEventBlock),
       label: GROQ_LABEL,
     },
   ];
@@ -237,6 +318,7 @@ API는 절대 만들어내지 마세요.`;
 
   // ---------- 3. 결과 분류 ----------
   const rawResponses: RawResponse[] = results.map((r) => ({ name: r.name, text: r.text, error: r._error }));
+  await saveDevChatEvent({ question, traceId: questionRef, responses: rawResponses });
   const succeeded = results.filter((r) => r.text && !r._error);
   const failed = results.filter((r) => r._error).map((r) => r.name);
 
