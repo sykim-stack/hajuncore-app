@@ -1,14 +1,25 @@
 // lib/devAiPanel.ts
-// 개발 Chat: NVIDIA 3모델(Llama/Nemotron/Codestral) + 관제 하준아이(Groq) 참여.
-// 심사위원은 Llama/Nemotron 중에서만 랜덤 선정 — Codestral, 관제 하준아이는 심사 후보 제외.
+// 개발 Chat: NVIDIA 2모델(Nemotron/Codestral) + 관제 하준아이(Groq) 참여.
+// 심사위원은 Nemotron 단독 (Llama 제거로 인해 사실상 고정, 코드는 후보 확장 가능하게 유지).
 // 모든 응답(채택 여부 무관)을 hajun_posts에 저장한다 (CoreNull "채택=보존 아님" 원칙).
-// 병렬 호출 → 직렬(순차) 호출로 변경, 요청 간 2초 대기, NVIDIA 타임아웃 60초, 지수 백오프 재시도 적용.
+//
+// v1.3 변경 (2026-08-23): Llama-3.3-70b 제거.
+// - Vercel Hobby(무료) 플랜은 서버리스 함수 실행시간 60초 하드캡.
+// - NVIDIA API 직접 curl 테스트 결과: "hello" 50토큰 응답도 e2e_latency는 0.19초인데
+//   전체 왕복은 58.35초 — 즉 콜드스타트로 NVIDIA 쪽에서 58초가 그냥 날아감.
+// - 실전 프롬프트(맥락 포함, max_tokens 1200)는 여유가 없어 거의 항상 60초를 넘겨
+//   AbortController가 끊음 ("This operation was aborted", 재시도해도 동일 패턴 반복).
+// - Nemotron은 같은 조건에서 정상 응답했으므로 콜드스타트가 Llama 모델 특정 문제로 판단,
+//   원인이 NVIDIA 인프라 쪽이라 코드로 해결 불가 → 패널에서 제외.
+// - 나중에 재도입하려면: 다른 NVIDIA 모델 ID로 같은 curl 테스트(PowerShell Invoke-RestMethod,
+//   TimeoutSec 65)를 먼저 돌려서 콜드스타트 여부 확인 후 판단할 것.
 
 import { callGroq } from '@/lib/groq';
 import { fetchContextSummary, fetchMindWorldSummary } from '@/lib/context';
 import { fetchLanguageKnowledge, buildLanguageKnowledgeBlock } from '@/lib/languageKnowledge';
 import { fetchRecentWorkLogs, buildWorkLogBlock } from '@/lib/workLog';
 import { getEngineRoomId, classifyEngineRoom, saveHajunPosts, fetchCurrentPhase, type HajunPostInput } from '@/lib/hajunRooms';
+import { GROUND_TRUTH_BLOCK } from '@/lib/groundTruth';
 
 const NVIDIA_KEY = process.env.NVIDIA_API_KEY!;
 const NVIDIA_ENDPOINT = 'https://integrate.api.nvidia.com/v1/chat/completions';
@@ -19,7 +30,6 @@ const GROQ_MODEL_USED = 'openai/gpt-oss-120b'; // lib/groq.ts와 동일하게 �
 type AiResult = { name: string; agent: string; model: string; text?: string; _error?: string };
 
 const MODELS = {
-  llama: { id: 'meta/llama-3.3-70b-instruct', label: 'Llama-3.3', agent: 'nvidia_llama' },
   nemotron: { id: 'nvidia/llama-3.3-nemotron-super-49b-v1.5', label: 'Nemotron-Super', agent: 'nvidia_nemotron' },
   codestral: { id: 'mistralai/codestral-22b-instruct-v0.1', label: 'Codestral', agent: 'nvidia_codestral' },
 } as const;
@@ -46,7 +56,7 @@ async function callNvidiaModel(
 
   const attemptFetch = async (): Promise<AiResult> => {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000); // 60초 타임아웃
+    const timeout = setTimeout(() => controller.abort(), 60000); // 60초 타임아웃 (Vercel Hobby 하드캡과 동일)
     try {
       const res = await fetch(NVIDIA_ENDPOINT, {
         method: 'POST',
@@ -161,12 +171,20 @@ export type DevChatResult = {
   rawResponses: RawResponse[];
 };
 
-// ---------- 메인 함수 (직렬 호출로 변경) ----------
+// ---------- 메인 함수 (직렬 호출) ----------
 export async function runDevChat(question: string, questionRef: string): Promise<DevChatResult> {
   const codeMode = looksLikeCodeQuestion(question);
   const shallowContext = await fetchContextSummary();
 
   const devPrompt = `당신은 개발 문제를 함께 고민하는 조언자입니다. 다음 프로젝트 맥락을 참고해 질문에 답하세요.
+
+절대 규칙:
+- 아래 "실제 시스템 사실" 블록과 프로젝트 맥락에 없는 파일 경로, 함수명, 테이블/컬럼명,
+  API 엔드포인트, 명령어, 정책 문서명을 지어내지 마세요.
+- 확실하지 않으면 "이 정보는 현재 맥락에 없습니다"라고 명확히 답하세요.
+- 그럴듯하게 들리는 답보다 정직하게 "모른다"고 말하는 것이 훨씬 낫습니다.
+
+${GROUND_TRUTH_BLOCK}
 
 프로젝트 맥락:
 ${shallowContext}
@@ -174,14 +192,11 @@ ${shallowContext}
 질문:
 ${question}
 
-간결하고 실용적으로, 코드가 필요하면 코드로 답하세요.`;
+간결하고 실용적으로, 코드가 필요하면 코드로 답하세요. 위 사실 블록에 없는 스키마나
+API는 절대 만들어내지 마세요.`;
 
   // ---------- 1. 실행할 태스크 정의 (순차 보장) ----------
   const tasks: { fn: () => Promise<AiResult>; label: string }[] = [
-    {
-      fn: () => callNvidiaModel(devPrompt, MODELS.llama.id, MODELS.llama.label, MODELS.llama.agent),
-      label: MODELS.llama.label,
-    },
     {
       fn: () => callNvidiaModel(devPrompt, MODELS.nemotron.id, MODELS.nemotron.label, MODELS.nemotron.agent),
       label: MODELS.nemotron.label,
@@ -225,7 +240,9 @@ ${question}
   const succeeded = results.filter((r) => r.text && !r._error);
   const failed = results.filter((r) => r._error).map((r) => r.name);
 
-  // ---------- 4. 심사 (Llama/Nemotron만 후보) ----------
+  // ---------- 4. 심사 (Nemotron만 후보. Codestral/관제 하준아이는 제외) ----------
+  // Llama 제거로 현재는 사실상 Nemotron 단독 후보. 향후 다른 안전한 모델을 재추가하면
+  // 이 필터가 자동으로 여러 후보 중 랜덤 심사로 확장된다 (코드 변경 불필요).
   const judgeCandidates = succeeded.filter(
     (r) => r.agent !== MODELS.codestral.agent && r.agent !== 'hajun_control'
   );
@@ -241,16 +258,21 @@ ${question}
   } else if (judgeCandidates.length === 0) {
     finalAnswer = succeeded[0].text!;
     bestSource = succeeded[0].name;
-    judgedBy = 'n/a (Llama/Nemotron 모두 실패)';
+    judgedBy = 'n/a (심사 후보 없음)';
   } else if (succeeded.length === 1) {
     finalAnswer = succeeded[0].text!;
     bestSource = succeeded[0].name;
     judgedBy = 'n/a (단일 응답)';
+  } else if (judgeCandidates.length === 1) {
+    // 후보가 하나뿐이면 랜덤 심사할 필요 없이 그대로 채택
+    finalAnswer = judgeCandidates[0].text!;
+    bestSource = judgeCandidates[0].name;
+    judgedBy = 'n/a (심사 후보 1명, 자동 채택)';
   } else {
-    // 랜덤 심사위원 선정
+    // 랜덤 심사위원 선정 (향후 후보가 2개 이상일 때 대비, 현재는 실행되지 않음)
     const judgeIdx = Math.floor(Math.random() * judgeCandidates.length);
     const judge = judgeCandidates[judgeIdx];
-    const judgeModelId = judge.agent === MODELS.llama.agent ? MODELS.llama.id : MODELS.nemotron.id;
+    const judgeModelId = judge.agent === MODELS.nemotron.agent ? MODELS.nemotron.id : judge.model;
 
     const judgePrompt = `다음은 같은 개발 질문에 대한 서로 다른 AI들의 답변입니다.
 가장 정확하고 실용적인 답을 고르거나, 필요하면 여러 답의 장점을 종합해 하나의 최종 답변을 작성하세요.

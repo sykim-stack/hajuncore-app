@@ -26,6 +26,8 @@ import { fetchContextSummary, fetchMindWorldSummary } from '@/lib/context';
 import { callGroq } from '@/lib/groq';
 import { runDevChat } from '@/lib/devAiPanel';
 import { buildRoomContextPackage, type EngineRoom } from '@/lib/hajunRooms';
+import { GROUND_TRUTH_BLOCK } from '@/lib/groundTruth';
+export const maxDuration = 30; // Hobby 플랜 기본 10초 → 30초로 확보 (직렬 전환 대비)
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
@@ -100,14 +102,17 @@ async function fetchOpportunities(ownerKey: string): Promise<{
   try {
     const res = await fetch(
       `${COREHUB_URL}/api/corehub/opportunities?owner_key=${encodeURIComponent(ownerKey)}`,
-      { headers: { 'Content-Type': 'application/json' }, cache: 'no-store' }
+      {
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(3000), // CoreHub가 멈춰있어도 3초면 포기
+      }
     );
     if (!res.ok) return { text: '', ids: [] };
     const json = await res.json();
     const items = json.data || [];
     if (items.length === 0) return { text: '', ids: [] };
 
-    // 우선순위 높은 것 3개만 사용
     const top = items.slice(0, 3);
     const ids = top.map((o: { id: string }) => o.id);
     const text = top
@@ -121,6 +126,21 @@ async function fetchOpportunities(ownerKey: string): Promise<{
     return { text: '', ids: [] };
   }
 }
+
+// ── chat action 본문 (Promise.all → 직렬 전환) ────────────────
+// action === 'chat' 블록 안, 기존 Promise.all 부분만 아래로 교체
+/*
+      const trimmedMessage = message.trim();
+
+      // v1.3: 병렬 → 직렬. 커넥션 부하를 줄이고, 어느 단계에서 느려지는지
+      // 나중에 로그로 특정하기 쉽게 한다. 각 함수는 fail-soft(catch로 감싸짐)라
+      // 하나가 느려져도 최소한 timeout까지만 기다리고 다음으로 넘어간다.
+      const contextSummary = await fetchContextSummary();
+      const mindWorldSummary = await fetchMindWorldSummary();
+      const opportunities = await fetchOpportunities(owner_key);
+      const languageKnowledgeItems = await fetchLanguageKnowledge({ text: trimmedMessage, limit: 3 });
+      const recentWorkLogs = await fetchRecentWorkLogs(5);
+*/
 
 // ── Opportunity 소비 처리 ────────────────────────────────────
 async function consumeOpportunities(ids: string[], outcome = 'shown'): Promise<void> {
@@ -347,7 +367,7 @@ ${docsContent}
 
       return Response.json({ ...pkg, traceId: createTraceId() });
     }
-    
+
     return Response.json({ _error: '알 수 없는 action' }, { status: 200 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);

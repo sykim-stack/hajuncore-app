@@ -94,6 +94,37 @@ const INIT_MESSAGE: Message = {
 
 const EMPTY_DRAFT: ContextDraft = { last_task: '', summary: '', next_action: '', current_problems: '' };
 
+type ChatApiResponse = {
+  _error?: string;
+  reply?: string;
+  observations?: string[];
+  bestSource?: string;
+  judgedBy?: string;
+  participants?: string[];
+  failed?: string[];
+  rawResponses?: { name: string; text?: string; error?: string }[];
+};
+
+// API가 JSON이 아닌 오류 본문을 반환해도 원문을 버리지 않는다.
+// 이 함수는 채팅 화면의 표시만 바꾸며 DB·메시지·맥락 저장에는 관여하지 않는다.
+async function readChatApiResponse(res: Response): Promise<ChatApiResponse> {
+  const contentType = res.headers.get('content-type') || '(없음)';
+  const raw = await res.text();
+
+  try {
+    const parsed = JSON.parse(raw) as ChatApiResponse;
+    if (res.ok) return parsed;
+  } catch {
+    // 아래에서 HTTP 상태·Content-Type·원문 일부를 그대로 화면에 보인다.
+  }
+
+  const body = raw.replace(/\s+/g, ' ').trim().slice(0, 600) || '(응답 본문 없음)';
+  const statusText = res.statusText ? ` ${res.statusText}` : '';
+  return {
+    _error: `HTTP ${res.status}${statusText} | content-type: ${contentType} | body: ${body}`,
+  };
+}
+
 function loadMessages(): Message[] {
   if (typeof window === 'undefined') return [INIT_MESSAGE];
   try {
@@ -164,7 +195,7 @@ const [expandedRaw, setExpandedRaw] = useState<Record<number, boolean>>({});
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: msg, history, owner_key: ownerKey }),
         });
-        const json = await res.json();
+        const json = await readChatApiResponse(res);
         if (json._error) {
           setMessages(prev => [...prev, { role: 'assistant', content: `오류: ${json._error}` }]);
         } else {
@@ -182,7 +213,7 @@ const [expandedRaw, setExpandedRaw] = useState<Record<number, boolean>>({});
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: msg }),
         });
-        const json = await res.json();
+        const json = await readChatApiResponse(res);
         if (json._error) {
           setMessages(prev => [...prev, { role: 'assistant', content: `오류: ${json._error}` }]);
         } else {

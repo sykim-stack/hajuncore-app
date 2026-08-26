@@ -1,6 +1,8 @@
 // lib/groq.ts
 // 공용 Groq 호출 함수 — 관제 Chat과 개발 Chat(관제 하준아이 참여자)이 공유한다.
 
+export const maxDuration = 30; // Hobby 플랜 기본 10초 → 30초로 확보 (직렬 전환 대비)
+
 const GROQ_KEY = process.env.GROQ_API_KEY!;
 
 export async function callGroq(
@@ -24,6 +26,7 @@ export async function callGroq(
         temperature: 0.4,
         max_tokens: 1024,
       }),
+      signal: AbortSignal.timeout(15000), // Groq 자체는 보통 빠르지만 안전장치
     });
     if (!res.ok) return { _error: `Groq API 오류: ${await res.text()}` };
     const data = await res.json();

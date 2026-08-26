@@ -31,7 +31,11 @@ export async function fetchMindWorldSummary(): Promise<string> {
   try {
     const res = await fetch(
       `${SUPABASE_URL}/rest/v1/corenull_rooms?house_id=eq.${HOUSE_ID}&order=updated_at.desc&limit=5`,
-      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, cache: 'no-store' }
+      {
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000), // 5초 넘으면 포기하고 fallback
+      }
     );
     if (!res.ok) return '씨앗 데이터 없음';
     const rooms = await res.json();
