@@ -1,6 +1,6 @@
 // lib/devAiPanel.ts
-// 개발 Chat: NVIDIA 2모델(Nemotron/Codestral) + 관제 하준아이(Groq) 참여.
-// 심사위원은 Nemotron 단독 (Llama 제거로 인해 사실상 고정, 코드는 후보 확장 가능하게 유지).
+// 개발 Chat: NVIDIA Nemotron + 관제 하준아이(Groq) 참여.
+// 각 참여자는 새 사람 원문 사건을 이전 요약보다 우선해 읽는다.
 // 모든 응답(채택 여부 무관)을 hajun_posts에 저장한다 (CoreNull "채택=보존 아님" 원칙).
 //
 // v1.3 변경 (2026-08-23): Llama-3.3-70b 제거.
@@ -38,20 +38,10 @@ type DevChatEvent = {
 };
 
 const MODELS = {
-  nemotron: { id: 'nvidia/llama-3.3-nemotron-super-49b-v1.5', label: 'Nemotron-Super', agent: 'nvidia_nemotron' },
-  codestral: { id: 'mistralai/codestral-22b-instruct-v0.1', label: 'Codestral', agent: 'nvidia_codestral' },
+  // 이전 llama-3.3-nemotron-super-49b-v1.5는 2026-08-26에 NVIDIA API에서 종료됐다.
+  // 현행 NVIDIA NIM 카탈로그의 Nemotron 3 Nano로 교체한다.
+  nemotron: { id: 'nvidia/nemotron-3-nano-30b-a3b', label: 'Nemotron-3-Nano', agent: 'nvidia_nemotron' },
 } as const;
-
-const CODE_KEYWORDS = [
-  '코드', '함수', '버그', '에러', '오류', '고쳐', '수정', '스크립트',
-  '구현', 'route', 'api', 'typescript', 'javascript', '파일', 'import',
-  '컴파일', '빌드', 'sql', '쿼리', '타입', '리팩터', '리팩토링',
-];
-
-function looksLikeCodeQuestion(message: string): boolean {
-  const lower = message.toLowerCase();
-  return CODE_KEYWORDS.some((k) => lower.includes(k.toLowerCase()));
-}
 
 // ---------- NVIDIA 호출 (타임아웃 60초, 지수 백오프 재시도) ----------
 async function callNvidiaModel(
@@ -204,6 +194,8 @@ async function buildGroqContextPrompt(devChatEventBlock: string): Promise<string
 - 맥락에 없는 정보가 필요한 질문이면 "이 정보는 현재 맥락에 없습니다"라고 명확히 말하세요.
 - 그럴듯하게 들리는 답보다 정직하게 "모른다"고 말하는 것이 훨씬 낫습니다.
 - 마크다운 금지, 한국어만 사용, 간결하게.
+- 현재 사람 메시지는 가장 최근의 원문 사건입니다. 사람 메시지가 상태·관찰·완료 보고이면, 그 원문에 먼저 반응하세요.
+- 오래된 개발 맥락·작업 기록·이전 원문이 현재 사람 메시지와 다르면, 어느 쪽도 정답으로 바꾸지 말고 출처와 시간의 차이로만 구분하세요. 오래된 계획으로 현재 사람 메시지를 대체하지 마세요.
 
 현재 개발 맥락:
 ${contextSummary}
@@ -247,7 +239,7 @@ export type DevChatResult = {
 
 // ---------- 메인 함수 (직렬 호출) ----------
 export async function runDevChat(question: string, questionRef: string): Promise<DevChatResult> {
-  const codeMode = looksLikeCodeQuestion(question);
+  const codeMode = false;
   const [shallowContext, recentDevChatEvents] = await Promise.all([
     fetchContextSummary(),
     fetchRecentDevChatEvents(),
@@ -261,6 +253,8 @@ export async function runDevChat(question: string, questionRef: string): Promise
   API 엔드포인트, 명령어, 정책 문서명을 지어내지 마세요.
 - 확실하지 않으면 "이 정보는 현재 맥락에 없습니다"라고 명확히 답하세요.
 - 그럴듯하게 들리는 답보다 정직하게 "모른다"고 말하는 것이 훨씬 낫습니다.
+- 현재 사람 메시지는 가장 최근의 원문 사건입니다. 상태·관찰·완료 보고에는 그 원문을 먼저 반영하세요.
+- 프로젝트 맥락·이전 원문과 현재 사람 메시지가 다르면, 어느 쪽도 정답으로 바꾸지 말고 출처와 시간의 차이로만 구분하세요. 오래된 계획으로 현재 사람 메시지를 대체하지 마세요.
 
 ${GROUND_TRUTH_BLOCK}
 
@@ -288,14 +282,6 @@ API는 절대 만들어내지 마세요.`;
     },
   ];
 
-  // 코드 질문이면 Codestral 추가
-  if (codeMode) {
-    tasks.push({
-      fn: () => callNvidiaModel(devPrompt, MODELS.codestral.id, MODELS.codestral.label, MODELS.codestral.agent),
-      label: MODELS.codestral.label,
-    });
-  }
-
   // ---------- 2. 순차 실행 (요청 간 2초 대기) ----------
   const results: AiResult[] = [];
   for (let i = 0; i < tasks.length; i++) {
@@ -322,12 +308,8 @@ API는 절대 만들어내지 마세요.`;
   const succeeded = results.filter((r) => r.text && !r._error);
   const failed = results.filter((r) => r._error).map((r) => r.name);
 
-  // ---------- 4. 심사 (Nemotron만 후보. Codestral/관제 하준아이는 제외) ----------
-  // Llama 제거로 현재는 사실상 Nemotron 단독 후보. 향후 다른 안전한 모델을 재추가하면
-  // 이 필터가 자동으로 여러 후보 중 랜덤 심사로 확장된다 (코드 변경 불필요).
-  const judgeCandidates = succeeded.filter(
-    (r) => r.agent !== MODELS.codestral.agent && r.agent !== 'hajun_control'
-  );
+  // ---------- 4. 심사 (관제 하준아이는 원문 관찰 참여자이며 심사 후보가 아님) ----------
+  const judgeCandidates = succeeded.filter((r) => r.agent !== 'hajun_control');
 
   let finalAnswer: string;
   let bestSource: string;
