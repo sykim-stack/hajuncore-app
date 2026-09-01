@@ -17,6 +17,7 @@ const S: Record<string, React.CSSProperties> = {
 
   body:      { flex: 1, overflowY: 'auto', padding: '20px 24px', maxWidth: 760 },
   msgCard:   { marginBottom: 16, padding: 14, background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', transition: 'background 0.6s ease' },
+  msgCardAi: { borderLeft: '3px solid #39C5CF' },
   msgTop:    { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
   chip:      { fontSize: 10, padding: '2px 8px', borderRadius: 4, fontFamily: 'JetBrains Mono, monospace', fontWeight: 700 },
   author:    { fontSize: 12, fontWeight: 600, color: 'var(--text)' },
@@ -34,9 +35,13 @@ const S: Record<string, React.CSSProperties> = {
   select:    { background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', padding: '7px 10px', fontSize: 12, outline: 'none', fontFamily: 'Noto Sans KR, sans-serif' },
   textarea:  { width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', padding: '10px 14px', fontSize: 13, outline: 'none', resize: 'vertical' as const, fontFamily: 'Noto Sans KR, sans-serif', lineHeight: 1.5, minHeight: 70, marginBottom: 8 },
   refPicker: { display: 'flex', gap: 6, flexWrap: 'wrap' as const, marginBottom: 10, maxHeight: 70, overflowY: 'auto' as const },
+  refHint:   { fontSize: 10, color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace', marginBottom: 6 },
   refToggle: { fontSize: 11, padding: '4px 9px', borderRadius: 6, cursor: 'pointer', border: '1px solid var(--border)', fontFamily: 'JetBrains Mono, monospace' },
+  btnRow:    { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' as const },
   submitBtn: { padding: '9px 20px', background: 'var(--accent)', color: '#0D1117', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer' },
+  aiBtn:     { padding: '9px 20px', background: '#39C5CF', color: '#0D1117', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer' },
   submitOff: { background: 'var(--bg3)', color: 'var(--text3)', cursor: 'not-allowed' },
+  errMsg:    { fontSize: 12, color: 'var(--warn)', marginTop: 8 },
 };
 
 function chip(type: MsgType) {
@@ -58,6 +63,8 @@ export default function RoomPage() {
   const [messages, setMessages] = useState<HajunMessage[]>([]);
   const [loading, setLoading]   = useState(true);
   const [posting, setPosting]   = useState(false);
+  const [aiResponding, setAiResponding] = useState(false);
+  const [errMsg, setErrMsg]     = useState('');
 
   const [content, setContent]   = useState('');
   const [msgType, setMsgType]   = useState<MsgType>('question');
@@ -68,7 +75,7 @@ export default function RoomPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    // room_id는 URL에 없으므로 room_list로 먼저 확정 (기존 API는 건드리지 않음)
+    // room_id는 URL에 없으므로 room_list로 먼저 확정 (검증된 기존 action은 건드리지 않음)
     const listRes = await fetch(`/api/hajun?action=room_list&yard=${yardKey}`);
     const listJson = await listRes.json();
     const found: HajunRoom | undefined = listJson.payload?.rooms?.find(
@@ -105,6 +112,7 @@ export default function RoomPage() {
   const submit = async () => {
     if (!room || !content.trim() || posting) return;
     setPosting(true);
+    setErrMsg('');
     try {
       const res = await fetch('/api/hajun?action=post_message', {
         method: 'POST',
@@ -119,7 +127,9 @@ export default function RoomPage() {
         }),
       });
       const json = await res.json();
-      if (!json._error) {
+      if (json._error) {
+        setErrMsg(json._error);
+      } else {
         setContent('');
         setSelectedRefs(new Set());
         await load();
@@ -127,6 +137,35 @@ export default function RoomPage() {
       }
     } finally {
       setPosting(false);
+    }
+  };
+
+  // 두뇌 AI에게 이 방을 읽고 답해달라고 요청.
+  // selectedRefs가 있으면 "이 메시지들 보고 답해줘"로 넘기고,
+  // 없으면 서버가 알아서 방의 가장 최근 메시지를 대상으로 삼는다.
+  const requestAi = async () => {
+    if (!room || aiResponding) return;
+    setAiResponding(true);
+    setErrMsg('');
+    try {
+      const res = await fetch('/api/hajun?action=ai_respond', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          room_id: room.id,
+          ref_ids: Array.from(selectedRefs),
+        }),
+      });
+      const json = await res.json();
+      if (json._error) {
+        setErrMsg(json._error);
+      } else {
+        setSelectedRefs(new Set());
+        await load();
+        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+      }
+    } finally {
+      setAiResponding(false);
     }
   };
 
@@ -153,11 +192,15 @@ export default function RoomPage() {
             <div style={S.empty}>아직 이 방에 메시지가 없습니다. 아래에서 첫 메시지를 남겨보세요.</div>
           )}
           {messages.map((m) => (
-            <div key={m.id} id={`msg-${m.id}`} style={S.msgCard}>
+            <div
+              key={m.id}
+              id={`msg-${m.id}`}
+              style={{ ...S.msgCard, ...(m.author_type === 'ai' ? S.msgCardAi : {}) }}
+            >
               <div style={S.msgTop}>
                 {chip(m.msg_type)}
                 <span style={S.author}>{m.author_name}</span>
-                <span style={S.authorTag}>{m.author_type === 'human' ? '사람' : 'AI'}</span>
+                <span style={S.authorTag}>{m.author_type === 'human' ? '사람' : 'AI 참여자'}</span>
                 <span style={S.time}>{fmtTime(m.created_at)}</span>
               </div>
               <div style={S.content}>{m.content}</div>
@@ -195,40 +238,59 @@ export default function RoomPage() {
           </div>
 
           {messages.length > 0 && (
-            <div style={S.refPicker}>
-              {messages.map((m) => {
-                const selected = selectedRefs.has(m.id);
-                return (
-                  <span
-                    key={m.id}
-                    onClick={() => toggleRef(m.id)}
-                    style={{
-                      ...S.refToggle,
-                      background: selected ? 'rgba(88,166,255,0.15)' : 'var(--bg3)',
-                      color: selected ? 'var(--accent)' : 'var(--text3)',
-                      borderColor: selected ? 'var(--accent)' : 'var(--border)',
-                    }}
-                  >
-                    {selected ? '✓ ' : ''}{m.content.slice(0, 20)}{m.content.length > 20 ? '…' : ''}
-                  </span>
-                );
-              })}
-            </div>
+            <>
+              <div style={S.refHint}>
+                참조할 이전 메시지 선택 (사람 글 작성 시 근거로, AI 요청 시 &quot;이거 보고 답해줘&quot;로 쓰임)
+              </div>
+              <div style={S.refPicker}>
+                {messages.map((m) => {
+                  const selected = selectedRefs.has(m.id);
+                  return (
+                    <span
+                      key={m.id}
+                      onClick={() => toggleRef(m.id)}
+                      style={{
+                        ...S.refToggle,
+                        background: selected ? 'rgba(88,166,255,0.15)' : 'var(--bg3)',
+                        color: selected ? 'var(--accent)' : 'var(--text3)',
+                        borderColor: selected ? 'var(--accent)' : 'var(--border)',
+                      }}
+                    >
+                      {selected ? '✓ ' : ''}{m.content.slice(0, 20)}{m.content.length > 20 ? '…' : ''}
+                    </span>
+                  );
+                })}
+              </div>
+            </>
           )}
 
           <textarea
             style={S.textarea}
-            placeholder="이 방에 남길 메시지... (위에서 딛고 갈 이전 메시지를 선택할 수 있습니다)"
+            placeholder="이 방에 남길 메시지..."
             value={content}
             onChange={(e) => setContent(e.target.value)}
           />
-          <button
-            style={{ ...S.submitBtn, ...(posting || !content.trim() ? S.submitOff : {}) }}
-            onClick={submit}
-            disabled={posting || !content.trim()}
-          >
-            {posting ? '⏳ 남기는 중...' : '방에 남기기'}
-          </button>
+
+          <div style={S.btnRow}>
+            <button
+              style={{ ...S.submitBtn, ...(posting || !content.trim() ? S.submitOff : {}) }}
+              onClick={submit}
+              disabled={posting || !content.trim()}
+            >
+              {posting ? '⏳ 남기는 중...' : '방에 남기기'}
+            </button>
+
+            <button
+              style={{ ...S.aiBtn, ...(aiResponding || messages.length === 0 ? S.submitOff : {}) }}
+              onClick={requestAi}
+              disabled={aiResponding || messages.length === 0}
+              title="두뇌 AI가 이 방의 전체 기록을 읽고, 선택된(또는 가장 최근) 메시지에 답합니다"
+            >
+              {aiResponding ? '🤖 방을 읽는 중...' : '🤖 AI 답변 요청'}
+            </button>
+          </div>
+
+          {errMsg && <div style={S.errMsg}>⚠ {errMsg}</div>}
         </div>
       </main>
 
