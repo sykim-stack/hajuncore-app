@@ -4,6 +4,7 @@ import { usePathname } from 'next/navigation';
 import { useState } from 'react';
 
 const NAV = [
+  { href: '/hajun',     icon: '🏠', label: '하준아이' },
   { href: '/dashboard', icon: '🎯', label: '대시보드' },
   { href: '/health',    icon: '🩺', label: '헬스' },
   { href: '/snapshots', icon: '📸', label: '스냅샷' },
@@ -98,7 +99,7 @@ export default function Sidebar() {
         </nav>
 
         <div style={{ padding: '16px 20px', fontSize: 10, color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace' }}>
-          v1.1 · 기억보다 행동
+          v2.0 · 방은 고정, 참여자는 유동
         </div>
       </aside>
 
