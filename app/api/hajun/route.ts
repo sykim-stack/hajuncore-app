@@ -34,8 +34,8 @@ const GROQ_KEY      = process.env.GROQ_API_KEY!;
 
 // 현재 방에 입주해 있는 두뇌 AI. 언제든 교체 가능 — 교체 시 이 두 상수와
 // callBrainAI() 내부 호출부만 바꾸면 되고, 나머지 흐름은 그대로 유지된다.
-const AI_MODEL_NAME = 'llama-3.3-70b';
-const AI_MODEL_API  = 'llama-3.3-70b-versatile';
+const AI_MODEL_NAME = 'llama-3.1-70b';
+const AI_MODEL_API  = 'llama-3.1-70b-versatile';
 
 const AUTHOR_TYPES = ['human', 'ai'] as const;
 const MSG_TYPES = [
