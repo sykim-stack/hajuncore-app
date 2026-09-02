@@ -34,8 +34,14 @@ const GROQ_KEY      = process.env.GROQ_API_KEY!;
 
 // 현재 방에 입주해 있는 두뇌 AI. 언제든 교체 가능 — 교체 시 이 두 상수와
 // callBrainAI() 내부 호출부만 바꾸면 되고, 나머지 흐름은 그대로 유지된다.
-const AI_MODEL_NAME = 'llama-3.3-70b';
-const AI_MODEL_API  = 'llama-3.3-70b-versatile';
+//
+// [입주자 교체 기록]
+// llama-3.3-70b-versatile → Groq가 2026-08-16부로 폐지 (2026-06-17 공지).
+// 공식 권장 대체 모델인 openai/gpt-oss-120b로 교체 (2026-08-31).
+// 방/메시지 구조는 전혀 변경 없음 — 상수 두 줄만 교체하면 되는 게
+// "방은 고정, 참여자는 유동" 원칙이 실제로 작동한 사례.
+const AI_MODEL_NAME = 'gpt-oss-120b';
+const AI_MODEL_API  = 'openai/gpt-oss-120b';
 
 const AUTHOR_TYPES = ['human', 'ai'] as const;
 const MSG_TYPES = [
