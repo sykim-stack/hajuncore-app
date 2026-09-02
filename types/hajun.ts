@@ -70,4 +70,5 @@ export const MSG_TYPE_ORDER: MsgType[] = [
 export const YARD_LABEL: Record<string, string> = {
   gwanje: '관제마당',
   gaebal: '개발마당',
+  brainpool: '브라이언풀마당',
 };
