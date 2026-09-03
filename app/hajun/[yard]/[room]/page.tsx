@@ -15,7 +15,7 @@ const S: Record<string, React.CSSProperties> = {
   crumb: { fontSize: 12, color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace', marginBottom: 6 },
   title: { fontSize: 20, fontWeight: 700 },
 
-  body:      { flex: 1, overflowY: 'auto', padding: '20px 24px', maxWidth: 760 },
+  body:      { flex: 1, overflowY: 'auto', padding: '20px 24px', maxWidth: 760, scrollbarWidth: 'thin' as const, scrollbarColor: 'var(--border) transparent' },
   msgCard:   { marginBottom: 16, padding: 14, background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', transition: 'background 0.6s ease' },
   msgCardAi: { borderLeft: '3px solid #39C5CF' },
   msgTop:    { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
@@ -88,6 +88,8 @@ export default function RoomPage() {
     const viewJson = await viewRes.json();
     setMessages(viewJson.payload?.messages || []);
     setLoading(false);
+    // 방에 들어오면 처음부터가 아니라 가장 최신 메시지부터 보이게
+    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'auto' }), 50);
   }, [yardKey, roomKey]);
 
   useEffect(() => { load(); }, [load]);
@@ -186,7 +188,7 @@ export default function RoomPage() {
           <div style={S.title}>{room?.name || '방'}</div>
         </div>
 
-        <div style={S.body}>
+        <div style={S.body} className="msg-body">
           {loading && <div style={{ color: 'var(--text2)', fontSize: 13 }}>⏳ 로딩 중...</div>}
           {!loading && messages.length === 0 && (
             <div style={S.empty}>아직 이 방에 메시지가 없습니다. 아래에서 첫 메시지를 남겨보세요.</div>
@@ -296,6 +298,10 @@ export default function RoomPage() {
 
       <style>{`
         .mobile-header-space { height: 0; }
+        .msg-body::-webkit-scrollbar { width: 6px; }
+        .msg-body::-webkit-scrollbar-track { background: transparent; }
+        .msg-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        .msg-body::-webkit-scrollbar-thumb:hover { background: var(--text3); }
         @media (max-width: 768px) {
           .mobile-header-space { height: 48px !important; }
         }
