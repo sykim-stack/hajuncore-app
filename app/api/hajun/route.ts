@@ -55,8 +55,27 @@ type Msg = {
   author_name: string;
   msg_type: string;
   content: string;
+  ref_ids: string[];
   created_at: string;
 };
+
+// 방의 메시지가 다른 방을 ref_ids로 가리킬 때, 그 참조가 링크로만 남고
+// 끝나지 않도록 실제 내용을 따라가서 가져온다.
+// (오늘 확정한 "이웃 관계 - 마당 공유" 철학을 AI 컨텍스트 생성에도 적용)
+async function fetchExternalRefs(thread: Msg[]): Promise<Msg[]> {
+  const localIds = new Set(thread.map((m) => m.id));
+  const allRefIds = new Set<string>();
+  for (const m of thread) {
+    (m.ref_ids || []).forEach((id) => allRefIds.add(id));
+  }
+  const externalIds = Array.from(allRefIds).filter((id) => !localIds.has(id));
+  if (externalIds.length === 0) return [];
+
+  const data = await supabaseGet(
+    `hajun_messages?id=in.(${externalIds.join(',')})&order=created_at.asc`
+  );
+  return data || [];
+}
 
 function createTraceId() {
   return 'tr-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
@@ -130,7 +149,8 @@ async function resolveRoomId(params: {
 async function callBrainAI(
   roomName: string,
   thread: Msg[],
-  targetContent: string
+  targetContent: string,
+  externalRefs: Msg[]
 ): Promise<{ text?: string; _error?: string }> {
   if (!GROQ_KEY) return { _error: 'GROQ_API_KEY 환경변수 미설정' };
 
@@ -138,17 +158,26 @@ async function callBrainAI(
     .map((m) => `[${m.author_type === 'human' ? '사람' : 'AI'}·${m.author_name}·${m.msg_type}] ${m.content}`)
     .join('\n\n');
 
+  const externalText = externalRefs
+    .map((m) => `[다른 방·${m.author_type === 'human' ? '사람' : 'AI'}·${m.author_name}·${m.msg_type}] ${m.content}`)
+    .join('\n\n');
+
   const prompt = `당신은 지금 "${roomName}" 방에 들어와 있는 하준아이의 참여자입니다.
 당신은 특정 모델에 고정되지 않습니다. 입주자는 언제든 교체될 수 있고, 지금은 당신 차례입니다.
 이 방에 쌓인 기록이 당신의 유일한 맥락입니다. 매번 새로 시작하는 것이 아니라, 이 기록을 딛고 이어가세요.
+이 방의 메시지가 다른 방의 메시지를 참조(ref_ids)하고 있다면, 그 참조된 내용도 아래에 함께 주어집니다 -
+그것도 당신이 실제로 읽은 기록으로 취급하세요.
 
 규칙:
-- 이 방의 기록에 없는 내용은 지어내지 말고, 모르면 모른다고 하세요.
+- 아래 기록(이 방 + 참조된 다른 방)에 없는 내용은 지어내지 말고, 모르면 모른다고 하세요.
 - 마크다운 금지 (**, ##, - 목록 등 쓰지 말 것).
 - 한국어로만, 핵심만 간결하게 답하세요.
 
 === 이 방의 지난 기록 ===
 ${threadText || '(아직 기록 없음)'}
+
+=== 이 방의 메시지가 참조하고 있는, 다른 방의 기록 ===
+${externalText || '(참조된 것 없음)'}
 
 === 지금 답해야 할 부분 ===
 ${targetContent}`;
@@ -384,6 +413,9 @@ export async function POST(req: Request) {
         return Response.json({ _error: '이 방에 아직 기록이 없어 답할 근거가 없습니다', traceId }, { status: 200 });
       }
 
+      // 이 방의 메시지들이 다른 방을 ref_ids로 가리키고 있다면 실제로 따라가서 읽는다.
+      const externalRefs = await fetchExternalRefs(thread);
+
       // 지금 답해야 할 부분: 사람이 지정한 ref_ids가 있으면 그 메시지들,
       // 없으면 방의 가장 최근 메시지.
       let targetMsgs = thread.filter((m) => ref_ids.includes(m.id));
@@ -395,7 +427,7 @@ export async function POST(req: Request) {
         .join('\n');
       const effectiveRefIds = targetMsgs.map((m) => m.id);
 
-      const aiResult = await callBrainAI(room.name, thread, targetContent);
+      const aiResult = await callBrainAI(room.name, thread, targetContent, externalRefs);
       if (aiResult._error) {
         return Response.json({ _error: aiResult._error, traceId }, { status: 200 });
       }
