@@ -43,6 +43,13 @@ const GROQ_KEY      = process.env.GROQ_API_KEY!;
 const AI_MODEL_NAME = 'gpt-oss-120b';
 const AI_MODEL_API  = 'openai/gpt-oss-120b';
 
+// AI에게 한 번에 넘기는 이 방 메시지 최대 개수. 방 자체는 전부 남아있고
+// (append-only, DB는 그대로), 이건 매 호출마다 "지금 얼마나 읽힐지"만
+// 제한하는 것 — Groq 무료 티어 분당 토큰 한도(8000 TPM) 대응.
+const THREAD_WINDOW = 12;
+const EXTERNAL_REF_LIMIT = 3;
+const EXTERNAL_REF_CHAR_LIMIT = 400;
+
 const AUTHOR_TYPES = ['human', 'ai'] as const;
 const MSG_TYPES = [
   'doc_injection', 'understanding', 'question',
@@ -148,18 +155,29 @@ async function resolveRoomId(params: {
 // context_package 없음. 이 방의 원본 메시지 나열이 곧 맥락이다.
 async function callBrainAI(
   roomName: string,
-  thread: Msg[],
+  fullThread: Msg[],
   targetContent: string,
   externalRefs: Msg[]
 ): Promise<{ text?: string; _error?: string }> {
   if (!GROQ_KEY) return { _error: 'GROQ_API_KEY 환경변수 미설정' };
 
-  const threadText = thread
+  // 방은 전부 저장되어 있지만, 매 호출마다 전부 다시 읽히면 방이 자랄수록
+  // 토큰 한도를 넘는다. 최근 것 위주로만 이번 호출의 맥락을 구성한다.
+  const windowed = fullThread.slice(-THREAD_WINDOW);
+  const omitted = fullThread.length - windowed.length;
+
+  const threadText = windowed
     .map((m) => `[${m.author_type === 'human' ? '사람' : 'AI'}·${m.author_name}·${m.msg_type}] ${m.content}`)
     .join('\n\n');
 
-  const externalText = externalRefs
-    .map((m) => `[다른 방·${m.author_type === 'human' ? '사람' : 'AI'}·${m.author_name}·${m.msg_type}] ${m.content}`)
+  const limitedExternal = externalRefs.slice(0, EXTERNAL_REF_LIMIT);
+  const externalText = limitedExternal
+    .map((m) => {
+      const content = m.content.length > EXTERNAL_REF_CHAR_LIMIT
+        ? m.content.slice(0, EXTERNAL_REF_CHAR_LIMIT) + '...(생략)'
+        : m.content;
+      return `[다른 방·${m.author_type === 'human' ? '사람' : 'AI'}·${m.author_name}·${m.msg_type}] ${content}`;
+    })
     .join('\n\n');
 
   const prompt = `당신은 지금 "${roomName}" 방에 들어와 있는 하준아이의 참여자입니다.
@@ -167,6 +185,7 @@ async function callBrainAI(
 이 방에 쌓인 기록이 당신의 유일한 맥락입니다. 매번 새로 시작하는 것이 아니라, 이 기록을 딛고 이어가세요.
 이 방의 메시지가 다른 방의 메시지를 참조(ref_ids)하고 있다면, 그 참조된 내용도 아래에 함께 주어집니다 -
 그것도 당신이 실제로 읽은 기록으로 취급하세요.
+${omitted > 0 ? `아래는 이 방의 가장 최근 ${THREAD_WINDOW}개 기록입니다. 이보다 ${omitted}개 더 오래된 기록이 이 방에 있지만 이번엔 생략됐습니다.` : ''}
 
 규칙:
 - 아래 기록(이 방 + 참조된 다른 방)에 없는 내용은 지어내지 말고, 모르면 모른다고 하세요.
@@ -193,7 +212,7 @@ ${targetContent}`;
         model: AI_MODEL_API,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.4,
-        max_tokens: 1024,
+        max_tokens: 700,
       }),
     });
     if (!res.ok) {
