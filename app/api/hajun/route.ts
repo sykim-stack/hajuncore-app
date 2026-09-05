@@ -46,9 +46,10 @@ const AI_MODEL_API  = 'openai/gpt-oss-120b';
 // AI에게 한 번에 넘기는 이 방 메시지 최대 개수. 방 자체는 전부 남아있고
 // (append-only, DB는 그대로), 이건 매 호출마다 "지금 얼마나 읽힐지"만
 // 제한하는 것 — Groq 무료 티어 분당 토큰 한도(8000 TPM) 대응.
-const THREAD_WINDOW = 12;
-const EXTERNAL_REF_LIMIT = 3;
-const EXTERNAL_REF_CHAR_LIMIT = 400;
+const THREAD_WINDOW = 6;
+const THREAD_MSG_CHAR_LIMIT = 300;
+const EXTERNAL_REF_LIMIT = 2;
+const EXTERNAL_REF_CHAR_LIMIT = 250;
 
 const AUTHOR_TYPES = ['human', 'ai'] as const;
 const MSG_TYPES = [
@@ -167,7 +168,12 @@ async function callBrainAI(
   const omitted = fullThread.length - windowed.length;
 
   const threadText = windowed
-    .map((m) => `[${m.author_type === 'human' ? '사람' : 'AI'}·${m.author_name}·${m.msg_type}] ${m.content}`)
+    .map((m) => {
+      const content = m.content.length > THREAD_MSG_CHAR_LIMIT
+        ? m.content.slice(0, THREAD_MSG_CHAR_LIMIT) + '...(생략)'
+        : m.content;
+      return `[${m.author_type === 'human' ? '사람' : 'AI'}·${m.author_name}·${m.msg_type}] ${content}`;
+    })
     .join('\n\n');
 
   const limitedExternal = externalRefs.slice(0, EXTERNAL_REF_LIMIT);
