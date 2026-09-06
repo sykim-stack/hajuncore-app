@@ -7,7 +7,6 @@ import { useState } from 'react';
 // 운영 화면은 상태(대시보드)·대화(하준챗)·축적된 결과(기억)의 3축으로 유지한다.
 // 헬스는 대시보드에 흡수하고, 스냅샷은 실제 데이터 성격에 맞춰 기억으로 부른다.
 const NAV = [
-  { href: '/hajun',     icon: '🏠', label: '하준아이' },
   { href: '/dashboard', icon: '🎯', label: '대시보드' },
   { href: '/chat',      icon: '💬', label: '하준챗' },
   { href: '/snapshots', icon: '🧠', label: '기억' },

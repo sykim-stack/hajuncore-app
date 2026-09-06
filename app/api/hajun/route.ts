@@ -206,7 +206,8 @@ async function callGroq(
       Authorization: `Bearer ${GROQ_KEY}`,
     },
     body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      // [Groq 모델 교체 2026-09-06] 폐기된 llama-3.3-70b-versatile 대신 현재 사용 모델.
+      model: 'openai/gpt-oss-120b',
       messages,
       temperature: 0.4,
       max_tokens: 1024,
@@ -424,7 +425,8 @@ export async function POST(req: Request) {
       const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
-        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: prompt }], temperature: 0.4, max_tokens: 700 }),
+        // [Groq 모델 교체 2026-09-06] 마당 방 AI도 하준챗과 같은 모델을 사용한다.
+        body: JSON.stringify({ model: 'openai/gpt-oss-120b', messages: [{ role: 'user', content: prompt }], temperature: 0.4, max_tokens: 700 }),
       });
       if (!aiRes.ok) return Response.json({ _error: `AI 호출 실패: ${await aiRes.text()}`, traceId }, { status: 200 });
       const aiJson = await aiRes.json();
