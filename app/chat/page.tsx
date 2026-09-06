@@ -89,7 +89,8 @@ function roleLabelStyle(role: 'user' | 'assistant', mode: ChatMode): CSSProperti
 
 const INIT_MESSAGE: Message = {
   role: 'assistant',
-  content: '안녕하세요. 프로젝트 상태나 다음 작업에 대해 물어보세요.\n맥락(dev_contexts)과 씨앗 상태(MindWorld)를 읽고 답합니다.\n상단에서 관제/개발 모드를 전환할 수 있습니다.',
+  // [HajunAI 전체 맥락 2026-09-06] 채팅은 호출 시 세 마당의 최근 맥락을 명시적으로 읽는다.
+  content: '안녕하세요. 프로젝트 상태나 다음 작업에 대해 물어보세요.\n관제·개발 모드 모두 하준아이의 현재 맥락과 세 마당의 최근 기록을 읽고 답합니다.\n상단에서 관제/개발 모드를 전환할 수 있습니다.',
 };
 
 const EMPTY_DRAFT: ContextDraft = { last_task: '', summary: '', next_action: '', current_problems: '' };
@@ -131,6 +132,8 @@ function loadMessages(): Message[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [INIT_MESSAGE];
     const parsed = JSON.parse(raw) as Message[];
+    // [HajunAI 전체 맥락 2026-09-06] 과거 미구현 안내가 남아 있으면 새 초기 문구로 교체한다.
+    if (parsed.some((m) => m.content.includes('현재는 채팅 기능이 구현되지 않았습니다'))) return [INIT_MESSAGE];
     return parsed.length > 0 ? parsed : [INIT_MESSAGE];
   } catch { return [INIT_MESSAGE]; }
 }

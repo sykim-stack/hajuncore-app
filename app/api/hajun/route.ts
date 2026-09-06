@@ -168,6 +168,32 @@ async function fetchContextSummary(): Promise<string> {
   }
 }
 
+// [HajunAI 전체 맥락 2026-09-06]
+// 자동 피드 병합은 하지 않지만, 하준챗을 호출한 순간에는 세 마당을 명시적으로 조회한다.
+async function fetchYardContext(): Promise<string> {
+  const yards = [
+    { key: 'gwanje', label: '관제마당' },
+    { key: 'gaebal', label: '개발마당' },
+    { key: 'brainpool', label: '브라이언풀마당' },
+  ];
+  const sections = await Promise.all(yards.map(async ({ key, label }) => {
+    try {
+      const yard = await getYardByKey(key);
+      if (!yard) return `[${label}] 등록된 마당 없음`;
+      const rooms = await getRoomsByYardId(yard.id);
+      const roomSections = await Promise.all((rooms || []).map(async (room: { id: string; name?: string }) => {
+        const messages = await supabaseGet(`hajun_messages?room_id=eq.${room.id}&order=created_at.desc&limit=3`);
+        if (!messages?.length) return `방 ${room.name || room.id}: 메시지 없음`;
+        return `방 ${room.name || room.id}:\n${messages.reverse().map((m: { author_name?: string; content?: string }) => `  ${m.author_name || '작성자'}: ${(m.content || '').slice(0, 400)}`).join('\n')}`;
+      }));
+      return `[${label}]\n${roomSections.join('\n') || '방 없음'}`;
+    } catch {
+      return `[${label}] 조회 실패`;
+    }
+  }));
+  return sections.join('\n\n');
+}
+
 async function saveConversation(payload: {
   source_ai: string;
   original_message: string;
@@ -447,6 +473,25 @@ export async function POST(req: Request) {
       return Response.json({ payload: data[0] || null, traceId });
     }
 
+    // [HajunAI 전체 맥락 2026-09-06] UI의 개발 모드도 실제 응답 API를 사용한다.
+    if (action === 'dev_chat') {
+      const { message } = body as { message?: string };
+      if (!message?.trim()) return Response.json({ _error: '메시지가 비어있습니다', traceId }, { status: 200 });
+      if (!GROQ_KEY) return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
+      const [contextSummary, yardContext] = await Promise.all([fetchContextSummary(), fetchYardContext()]);
+      const result = await callGroq(
+        `당신은 BRAINPOOL OS 개발 모드 HajunAI입니다. 관제·개발·브라이언풀 마당의 명시적 맥락과 개발 상태를 근거로 답하세요. 모르는 것은 모른다고 하고 한국어로 간결하게 답하세요.
+개발 상태:
+${contextSummary}
+하준아이 마당 맥락:
+${yardContext}`,
+        message.trim(),
+        []
+      );
+      if (result._error) return Response.json({ _error: result._error, traceId }, { status: 200 });
+      return Response.json({ reply: result.text || '(응답 없음)', bestSource: 'HajunAI', judgedBy: '명시적 마당 맥락', participants: ['HajunAI'], failed: [], rawResponses: [], traceId });
+    }
+
     if (action === 'chat') {
       const { message, history = [], owner_key = '' } = body as {
         message: string;
@@ -459,10 +504,11 @@ export async function POST(req: Request) {
       if (!GROQ_KEY) {
         return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
       }
-      const [contextSummary, mindWorldSummary, opportunities] = await Promise.all([
+      const [contextSummary, mindWorldSummary, opportunities, yardContext] = await Promise.all([
         fetchContextSummary(),
         fetchMindWorldSummary(),
         fetchOpportunities(owner_key),
+        fetchYardContext(),
       ]);
       const opportunitySection = opportunities.text
         ? `\n발견된 기회 (CoreHub Publish):\n${opportunities.text}\n이 기회들은 강요하지 말고, 대화 흐름에서 자연스럽게 언급할 것.`
@@ -483,7 +529,10 @@ export async function POST(req: Request) {
 ${contextSummary}
 
 현재 씨앗/공간 상태 (MindWorld):
-${mindWorldSummary}`;
+${mindWorldSummary}
+
+명시적으로 조회한 하준아이 마당 전체 맥락:
+${yardContext}`;
       const groqResult = await callGroq(systemPrompt, message.trim(), history);
       if (groqResult._error) {
         return Response.json({ _error: groqResult._error, traceId }, { status: 200 });
