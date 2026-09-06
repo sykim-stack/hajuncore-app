@@ -420,14 +420,22 @@ export async function POST(req: Request) {
 
     // [CoreNull UI 정리 2026-09-06] 명시적으로 방을 방문한 사용자의 메시지만 저장한다.
     if (action === 'post_message') {
-      const { room_id, author_type, author_name, msg_type, content, ref_ids = [] } = body as {
-        room_id?: string; author_type?: string; author_name?: string;
-        msg_type?: string; content?: string; ref_ids?: string[];
-      };
+      // [호환성 보정 2026-09-07] 이전 UI/직접 호출의 camelCase 필드도 허용한다.
+      const room_id = body.room_id || body.roomId;
+      const author_type = body.author_type || body.authorType || 'human';
+      const author_name = body.author_name || body.authorName || '익명';
+      const msg_type = body.msg_type || body.msgType || 'question';
+      const content = body.content || body.message;
+      const ref_ids = body.ref_ids || body.refIds || [];
       const validAuthors = ['human', 'ai'];
       const validTypes = ['doc_injection', 'understanding', 'question', 'answer', 'decision', 'issue', 'work_result'];
-      if (!room_id || !author_type || !validAuthors.includes(author_type) || !author_name || !msg_type || !validTypes.includes(msg_type) || !content?.trim()) {
-        return Response.json({ _error: 'room_id, author_type, author_name, msg_type, content가 필요합니다', traceId }, { status: 200 });
+      const missing: string[] = [];
+      if (!room_id) missing.push('room_id');
+      if (!validAuthors.includes(author_type)) missing.push('author_type');
+      if (!validTypes.includes(msg_type)) missing.push('msg_type');
+      if (typeof content !== 'string' || !content.trim()) missing.push('content');
+      if (missing.length > 0) {
+        return Response.json({ _error: `메시지 저장 입력 오류: ${missing.join(', ')} 확인 필요`, traceId }, { status: 200 });
       }
       if (!Array.isArray(ref_ids)) return Response.json({ _error: 'ref_ids는 배열이어야 합니다', traceId }, { status: 200 });
       const saved = await insertHajunMessage({ room_id, author_type, author_name, msg_type, content: content.trim(), ref_ids });
