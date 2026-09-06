@@ -10,6 +10,8 @@ const NAV = [
   { href: '/dashboard', icon: '🎯', label: '대시보드' },
   { href: '/chat',      icon: '💬', label: '하준챗' },
   { href: '/snapshots', icon: '🧠', label: '기억' },
+  // [CoreNull UI 정리 2026-09-06] 마당은 자동 피드가 아니라 명시적 방문 공간이다.
+  { href: '/hajun',     icon: '🏡', label: '하준아이 마당' },
 ];
 
 export default function Sidebar() {
