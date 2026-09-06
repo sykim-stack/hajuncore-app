@@ -421,7 +421,21 @@ export async function POST(req: Request) {
     // [CoreNull UI 정리 2026-09-06] 명시적으로 방을 방문한 사용자의 메시지만 저장한다.
     if (action === 'post_message') {
       // [호환성 보정 2026-09-07] 이전 UI/직접 호출의 camelCase 필드도 허용한다.
-      const room_id = body.room_id || body.roomId;
+      let room_id = body.room_id || body.roomId;
+      // [브라이언풀 코어 확장 호환 2026-09-07]
+      // 외부 맥락 주입 확장 프로그램은 room_id 대신 기존 계약인
+      // (yard_key + room_key)를 보낸다. 이 조합을 실제 방 UUID로 해석한다.
+      if (!room_id && (body.yard_key || body.yardKey) && (body.room_key || body.roomKey)) {
+        const yardKey = body.yard_key || body.yardKey;
+        const roomKey = body.room_key || body.roomKey;
+        const yard = await getYardByKey(yardKey);
+        if (yard) {
+          const rooms = await supabaseGet(
+            `hajun_rooms?yard_id=eq.${yard.id}&key=eq.${encodeURIComponent(roomKey)}&limit=1`
+          );
+          room_id = rooms?.[0]?.id;
+        }
+      }
       const author_type = body.author_type || body.authorType || 'human';
       const author_name = body.author_name || body.authorName || '익명';
       const msg_type = body.msg_type || body.msgType || 'question';
