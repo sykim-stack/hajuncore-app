@@ -26,7 +26,8 @@ type ContextDraft = {
   current_problems: string;
 };
 
-const STORAGE_KEY = 'hajunai_chat_messages';
+// [HajunAI 전체 맥락 2026-09-07] 세 마당 컨텍스트 규칙 변경 전 대화와 분리한다.
+const STORAGE_KEY = 'hajunai_chat_messages_v2';
 const S: Record<string, CSSProperties> = {
   page:        { display: 'flex', minHeight: '100vh', background: 'var(--bg)' },
   main:        { flex: 1, display: 'flex', flexDirection: 'column', maxHeight: '100vh', overflow: 'hidden', minWidth: 0 },

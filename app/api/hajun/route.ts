@@ -153,8 +153,9 @@ async function fetchContextSummary(): Promise<string> {
     if (!data || data.length === 0) return '개발 맥락 없음';
     const c = data[0];
     const parts: string[] = [];
-    if (c.phase)          parts.push(`페이즈: ${c.phase}`);
-    if (c.status)         parts.push(`상태: ${c.status}`);
+    if (c.updated_at)     parts.push(`기록 시각: ${c.updated_at}`);
+    if (c.phase)          parts.push(`페이즈(보조 기록): ${c.phase}`);
+    if (c.status)         parts.push(`상태(보조 기록): ${c.status}`);
     if (c.last_task)      parts.push(`마지막 작업: ${c.last_task}`);
     if (c.next_action)    parts.push(`다음 액션: ${c.next_action}`);
     if (c.current_problems && c.current_problems !== '없음')
@@ -184,7 +185,7 @@ async function fetchYardContext(): Promise<string> {
       const roomSections = await Promise.all((rooms || []).map(async (room: { id: string; name?: string }) => {
         const messages = await supabaseGet(`hajun_messages?room_id=eq.${room.id}&order=created_at.desc&limit=3`);
         if (!messages?.length) return `방 ${room.name || room.id}: 메시지 없음`;
-        return `방 ${room.name || room.id}:\n${messages.reverse().map((m: { author_name?: string; content?: string }) => `  ${m.author_name || '작성자'}: ${(m.content || '').slice(0, 400)}`).join('\n')}`;
+        return `방 ${room.name || room.id}:\n${messages.reverse().map((m: { author_name?: string; content?: string; created_at?: string }) => `  [${m.created_at || '시각 없음'}] ${m.author_name || '작성자'}: ${(m.content || '').slice(0, 400)}`).join('\n')}`;
       }));
       return `[${label}]\n${roomSections.join('\n') || '방 없음'}`;
     } catch {
@@ -480,7 +481,7 @@ export async function POST(req: Request) {
       if (!GROQ_KEY) return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
       const [contextSummary, yardContext] = await Promise.all([fetchContextSummary(), fetchYardContext()]);
       const result = await callGroq(
-        `당신은 BRAINPOOL OS 개발 모드 HajunAI입니다. 관제·개발·브라이언풀 마당의 명시적 맥락과 개발 상태를 근거로 답하세요. 모르는 것은 모른다고 하고 한국어로 간결하게 답하세요.
+        `당신은 BRAINPOOL OS 개발 모드 HajunAI입니다. 관제·개발·브라이언풀 마당의 명시적 맥락과 개발 상태를 근거로 답하세요. 마당 메시지의 최신 기록을 오래된 dev_contexts 요약보다 우선하세요. 현재 시점과 맞지 않는 Step 3, CoreRing, 미완료 안내는 기록 시각을 밝혀 과거 기록으로 구분하세요. 모르는 것은 모른다고 하고 한국어로 간결하게 답하세요.
 개발 상태:
 ${contextSummary}
 하준아이 마당 맥락:
@@ -523,7 +524,12 @@ ${yardContext}`,
 - 한국어로만 답하세요.
 - 제안은 하되 강요하지 않습니다. 사용자 대신 결정하지 않습니다.
 - 필요하다고 판단되면 답변 끝에 "관찰:" 섹션을 추가하세요.
-  형식: 관찰:\n- 항목1\n- 항목2${opportunitySection}
+  형식: 관찰:\n- 항목1\n- 항목2
+
+최신성 규칙:
+- 하준아이 마당 메시지는 명시적으로 조회한 원본 기록이며 오래된 dev_contexts 요약보다 우선합니다.
+- 기록 시각이 없는 내용은 현재 상태로 단정하지 마세요.
+- 과거 Step 3, CoreRing, 번역, 음성 관련 요약이 최신 마당 기록과 다르면 과거 기록으로 구분하세요.${opportunitySection}
 
 현재 개발 맥락:
 ${contextSummary}
