@@ -327,7 +327,7 @@ export default function Dashboard() {
               </div>
               <div style={S.promptBox}>{prompt}</div>
               <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 8 }}>
-                Claude / ChatGPT 채팅창에 붙여넣으세요 · context_package: /api/hajun?action=context_package&agent=clo3
+                Claude / ChatGPT 채팅창에 붙여넣으세요 · 문서: /api/docs?agent=clo3
               </div>
             </div>
           </>

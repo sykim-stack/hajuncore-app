@@ -1,10 +1,8 @@
 // app/api/hajun/route.ts
 // BRAINPOOL 계약: throw 금지, _error 필드 사용, 200/500만
-// action: contexts | dev_contexts | snapshots | update_context | chat | summarize_context | context_package | sync_snapshot
-// SEE: lib/contextPackage.ts for agent=clo2|clo3 context packages
+// action: contexts | dev_contexts | snapshots | update_context | chat | summarize_context | sync_snapshot
 
 import { supabaseGet, supabasePatch } from '@/lib/supabase';
-import { buildContextPackage } from '@/lib/contextPackage';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
@@ -299,10 +297,11 @@ export async function GET(req: Request) {
       return Response.json({ id: saved[0]?.id, traceId: createTraceId() }, { status: 200 });
     }
 
-    // context_package: agent=clo2|clo3
+    // context_package was retired. Use GET /api/docs?agent=... for explicit documents.
     if (action === 'context_package') {
-      const result = await buildContextPackage(searchParams.get('agent'));
-      return Response.json(result);
+      return Response.json({
+        _error: 'context_package는 폐기되었습니다. GET /api/docs?agent=clo2|clo3|pm을 사용하세요.',
+      }, { status: 200 });
     }
 
     return Response.json({ _error: '알 수 없는 action' }, { status: 200 });

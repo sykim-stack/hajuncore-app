@@ -1,6 +1,6 @@
 // app/api/docs/route.ts
 // brainpool-os GitHub 문서를 fetch해서 반환
-// GET /api/docs?file=Master_Prompt_v2.0 | clo2 | clo3 | pm | CORENULL_ROADMAP
+// GET /api/docs?file=Master_Prompt_v2.0 | clo2 | clo3 | pm | CORENULL_ROADMAP | CoreNull_Core_Principles_v1.2
 // GET /api/docs?agent=clo2 | clo3 | pm  → 해당 에이전트 기본 문서 일괄
 // GET /api/docs?file=all
 
@@ -11,7 +11,7 @@ const GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/sykim-stack/brainpool
 const DOC_MAP: Record<string, string> = {
   'Master_Prompt_v2.0':    'doc/directives/Master_Prompt_v2.0.md',
   'Agents_Directive':      'doc/directives/Agents_Directive.md',
-  'CoreNull_Seed_System':  'doc/directives/CoreNull_Seed_System.md',
+  'CoreNull_Core_Principles_v1.2': 'doc/directives/CoreNull_Core_Principles_v1.2.md',
   'ARCHITECTURE_LINTER':   'doc/automation/ARCHITECTURE_LINTER.md',
   'WORKFLOW':              'doc/automation/WORKFLOW.md',
   'PM_GUARD':              'doc/automation/PM_GUARD.md',
@@ -28,7 +28,7 @@ const DOC_MAP: Record<string, string> = {
 const AGENT_DOCS: Record<string, string[]> = {
   claude2: ['Master_Prompt_v2.0', 'Agents_Directive', 'clo2'],
   clo2:    ['Master_Prompt_v2.0', 'Agents_Directive', 'clo2'],
-  clo3:    ['Master_Prompt_v2.0', 'Agents_Directive', 'clo3', 'CORENULL_ROADMAP', 'CoreNull_Seed_System'],
+  clo3:    ['Master_Prompt_v2.0', 'Agents_Directive', 'clo3', 'CORENULL_ROADMAP', 'CoreNull_Core_Principles_v1.2'],
   pm:      ['Master_Prompt_v2.0', 'Agents_Directive', 'pm', 'PM_GUARD', 'WORKFLOW', 'DOC_INDEX', 'DEV_CONTEXT_SUMMARY'],
 };
 
