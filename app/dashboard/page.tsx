@@ -42,6 +42,26 @@ function InfoCard({ icon, label, content, accent }: {
   );
 }
 
+// [CoreNull UI 정리 2026-09-06]
+// 헬스는 별도 화면이 아니라 현재 선택된 Core의 상태를 보여주는 대시보드 요약으로 제공한다.
+function HealthSummary({ score }: { score?: number }) {
+  const value = Math.max(0, Math.min(100, score ?? 0));
+  const color = value >= 80 ? '#3FB950' : value >= 50 ? '#F0883E' : '#F78166';
+  const label = value >= 80 ? '양호' : value >= 50 ? '주의' : '위험';
+  return (
+    <div style={{ ...S.card, display: 'flex', alignItems: 'center', gap: 14, marginBottom: 24 }}>
+      <div style={{ width: 72, height: 72, borderRadius: '50%', border: `8px solid ${color}`, display: 'grid', placeItems: 'center', color, fontWeight: 700, fontFamily: 'JetBrains Mono, monospace', flexShrink: 0 }}>
+        {value}
+      </div>
+      <div>
+        <div style={S.label}>현재 Core 헬스</div>
+        <div style={{ color, fontSize: 18, fontWeight: 700 }}>{label}</div>
+        <div style={{ color: 'var(--text2)', fontSize: 12, marginTop: 3 }}>선택된 프로젝트의 개발 맥락 기준</div>
+      </div>
+    </div>
+  );
+}
+
 function buildPrompt(c: DevContext, projectLabel: string): string {
   return `🦈 BRAINPOOL OS - ${projectLabel} 맥락 주입
 
@@ -232,6 +252,9 @@ export default function Dashboard() {
 
         {!loading && ctx && (
           <>
+            {/* [CoreNull UI 정리 2026-09-06] 기존 /health의 핵심 정보만 홈에 흡수한다. */}
+            <HealthSummary score={ctx.health_score} />
+
             <div style={{ marginBottom: 24 }}>
               <InfoCard icon="📌" label="Development Summary" content={ctx.development_summary || ''} accent="var(--accent)" />
               <InfoCard icon="💬" label="Conversation Summary" content={ctx.conversation_summary || ''} accent="var(--accent2)" />

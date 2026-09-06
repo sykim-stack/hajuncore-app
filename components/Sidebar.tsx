@@ -3,11 +3,13 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
 
+// [CoreNull UI 정리 2026-09-06]
+// 운영 화면은 상태(대시보드)·대화(하준챗)·축적된 결과(기억)의 3축으로 유지한다.
+// 헬스는 대시보드에 흡수하고, 스냅샷은 실제 데이터 성격에 맞춰 기억으로 부른다.
 const NAV = [
   { href: '/dashboard', icon: '🎯', label: '대시보드' },
-  { href: '/health',    icon: '🩺', label: '헬스' },
-  { href: '/snapshots', icon: '📸', label: '스냅샷' },
   { href: '/chat',      icon: '💬', label: '하준챗' },
+  { href: '/snapshots', icon: '🧠', label: '기억' },
 ];
 
 export default function Sidebar() {
