@@ -58,15 +58,16 @@ export default function Snapshots() {
       <Sidebar />
       <main style={S.main}>
         <div className="mobile-header-space" />
-        <div style={S.title}>📸 스냅샷</div>
-        <div style={S.sub}>{loading ? '로딩 중...' : `${snaps.length}개의 저장된 Knowledge Unit`}</div>
+        {/* [CoreNull UI 정리 2026-09-06] 이 화면은 house snapshot 원본이 아니라 축적된 Knowledge Unit을 보여준다. */}
+        <div style={S.title}>🧠 기억</div>
+        <div style={S.sub}>{loading ? '로딩 중...' : `${snaps.length}개의 저장된 기억 (Knowledge Unit)`}</div>
 
         <div className="snapshots-grid">
           {/* 목록 */}
           <div>
             {loading && <div style={{ color: 'var(--text2)', fontSize: 13 }}>⏳ 로딩 중...</div>}
             {!loading && snaps.length === 0 && (
-              <div style={{ color: 'var(--text3)', fontSize: 13, padding: 20, textAlign: 'center' }}>저장된 스냅샷 없음</div>
+              <div style={{ color: 'var(--text3)', fontSize: 13, padding: 20, textAlign: 'center' }}>저장된 기억 없음</div>
             )}
             {snaps.map(s => (
               <div key={s.id}

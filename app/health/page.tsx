@@ -1,4 +1,6 @@
 'use client';
+// [CoreNull UI 정리 2026-09-06]
+// 헬스는 대시보드에 흡수되었지만, 기존 북마크와 직접 URL 호환을 위해 페이지는 보존한다.
 import { useEffect, useState, useCallback } from 'react';
 import Sidebar from '@/components/Sidebar';
 

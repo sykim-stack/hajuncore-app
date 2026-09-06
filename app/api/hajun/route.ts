@@ -1,101 +1,34 @@
 // app/api/hajun/route.ts
-// 하준아이(AI CoreNull) — 마당·거실·방 구조 API
-//
-// BRAINPOOL 계약: throw 금지, _error 필드 사용, req.text()+JSON.parse(),
-// HTTP 200/500만, traceId 항상 포함.
-//
-// 확정 원칙:
-//   - 메시지 원본은 오직 방(room)에만 존재한다.
-//   - 마당(yard)/거실(livingroom)/방(room)은 전부 hajun_messages를
-//     범위·개수만 다르게 잘라보는 View다. 새 테이블이 아니다.
-//   - hajun_messages는 append-only. UPDATE 없음.
-//   - 방은 고정, 참여자(author)는 유동. HajunAI는 특정 모델에 고정되지 않는다.
-//   - ref_ids는 이 메시지가 딛고 선 이전 메시지들 (성장의 계보).
-//     human/ai 둘 다 채울 수 있고, 다른 방의 메시지도 참조 가능.
-//   - 두뇌 AI(현재 Groq llama-3.3-70b)는 방을 스스로 읽어서 맥락을 복구한다.
-//     별도 context_package 주입 없음. 트리거는 사람의 명시적 요청뿐.
-//     모델이 바뀌어도 이 action의 나머지 구조는 그대로 재사용된다.
-//
-// action 목록 (Vercel Hobby 12-route 한도 유지를 위해 단일 라우트 유지):
-//   GET  yard_list                         → 마당 목록
-//   GET  room_list      &yard=<key>        → 마당 산하 방 목록
-//   GET  view_room       &room_id=<uuid>   → 방 뷰 (전체 이력, 깊게)
-//   GET  view_livingroom &yard=<key>&limit=<n> → 거실 뷰 (방별 최신 N개)
-//   GET  view_yard       &yard=<key>       → 마당 뷰 (방별 최신 1개)
-//   POST post_message                       → 메시지 작성 (참여자가 방에 포스팅)
-//   POST room_create                        → 새 방 생성 (마당 산하)
-//   POST ai_respond                         → 두뇌 AI가 방을 읽고 답변 남김
+// BRAINPOOL 계약: throw 금지, _error 필드 사용, 200/500만
+// action: contexts | dev_contexts | snapshots | update_context | chat | summarize_context | sync_snapshot
+// [CoreNull UI 정리 2026-09-06] 기존 마당·방 View 라우트도 유지한다. 마당은 자동 병합이 아니라 명시적 URL 방문 범위다.
 
-import { supabaseGet } from '@/lib/supabase';
+import { supabaseGet, supabasePatch } from '@/lib/supabase';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
-const GROQ_KEY      = process.env.GROQ_API_KEY!;
-
-// 현재 방에 입주해 있는 두뇌 AI. 언제든 교체 가능 — 교체 시 이 두 상수와
-// callBrainAI() 내부 호출부만 바꾸면 되고, 나머지 흐름은 그대로 유지된다.
-//
-// [입주자 교체 기록]
-// llama-3.3-70b-versatile → Groq가 2026-08-16부로 폐지 (2026-06-17 공지).
-// 공식 권장 대체 모델인 openai/gpt-oss-120b로 교체 (2026-08-31).
-// 방/메시지 구조는 전혀 변경 없음 — 상수 두 줄만 교체하면 되는 게
-// "방은 고정, 참여자는 유동" 원칙이 실제로 작동한 사례.
-const AI_MODEL_NAME = 'gpt-oss-120b';
-const AI_MODEL_API  = 'openai/gpt-oss-120b';
-
-// AI에게 한 번에 넘기는 이 방 메시지 최대 개수. 방 자체는 전부 남아있고
-// (append-only, DB는 그대로), 이건 매 호출마다 "지금 얼마나 읽힐지"만
-// 제한하는 것 — Groq 무료 티어 분당 토큰 한도(8000 TPM) 대응.
-const THREAD_WINDOW = 6;
-const THREAD_MSG_CHAR_LIMIT = 300;
-const EXTERNAL_REF_LIMIT = 2;
-const EXTERNAL_REF_CHAR_LIMIT = 250;
-
-const AUTHOR_TYPES = ['human', 'ai'] as const;
-const MSG_TYPES = [
-  'doc_injection', 'understanding', 'question',
-  'answer', 'decision', 'issue', 'work_result',
-] as const;
-
-type Msg = {
-  id: string;
-  author_type: string;
-  author_name: string;
-  msg_type: string;
-  content: string;
-  ref_ids: string[];
-  created_at: string;
-};
-
-// 방의 메시지가 다른 방을 ref_ids로 가리킬 때, 그 참조가 링크로만 남고
-// 끝나지 않도록 실제 내용을 따라가서 가져온다.
-// (오늘 확정한 "이웃 관계 - 마당 공유" 철학을 AI 컨텍스트 생성에도 적용)
-async function fetchExternalRefs(thread: Msg[]): Promise<Msg[]> {
-  const localIds = new Set(thread.map((m) => m.id));
-  const allRefIds = new Set<string>();
-  for (const m of thread) {
-    (m.ref_ids || []).forEach((id) => allRefIds.add(id));
-  }
-  const externalIds = Array.from(allRefIds).filter((id) => !localIds.has(id));
-  if (externalIds.length === 0) return [];
-
-  const data = await supabaseGet(
-    `hajun_messages?id=in.(${externalIds.join(',')})&order=created_at.asc`
-  );
-  return data || [];
-}
+const GEMINI_KEY  = process.env.GEMINI_API_KEY!;
+const GROQ_KEY    = process.env.GROQ_API_KEY!;
+const HOUSE_ID    = '6341b872-4555-4fdc-8f1d-8009b2b1764f';
+const COREHUB_URL = process.env.COREHUB_URL || 'https://brainpool-corehub.vercel.app';
 
 function createTraceId() {
   return 'tr-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
 }
 
-// ── 공통 insert 헬퍼 (throw 없이 _error 반환) ────────────────────
-async function supabaseInsert(
-  table: string,
-  body: Record<string, unknown>
-): Promise<{ data?: Record<string, unknown>[]; _error?: string }> {
+// [CoreNull UI 정리 2026-09-06] 관제마당·개발마당·브라이언풀마당의 원본 조회 헬퍼.
+async function getYardByKey(key: string) {
+  const data = await supabaseGet(`hajun_yards?key=eq.${encodeURIComponent(key)}&limit=1`);
+  return data?.[0] || null;
+}
+
+async function getRoomsByYardId(yardId: string) {
+  return supabaseGet(`hajun_rooms?yard_id=eq.${yardId}&order=created_at.asc`);
+}
+
+async function insertHajunMessage(body: Record<string, unknown>) {
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/hajun_messages`, {
       method: 'POST',
       headers: {
         apikey: SUPABASE_KEY,
@@ -105,226 +38,349 @@ async function supabaseInsert(
       },
       body: JSON.stringify(body),
     });
-    if (!res.ok) {
-      const text = await res.text();
-      return { _error: `Supabase INSERT 실패 (${table}, ${res.status}): ${text}` };
-    }
-    const data = await res.json();
-    return { data };
-  } catch (e: unknown) {
+    if (!res.ok) return { _error: `메시지 저장 실패: ${await res.text()}` };
+    return { data: await res.json() };
+  } catch (e) {
     return { _error: e instanceof Error ? e.message : String(e) };
   }
 }
 
-// ── 마당 key → id 조회 ───────────────────────────────────────────
-async function getYardByKey(key: string) {
-  const data = await supabaseGet(`hajun_yards?key=eq.${encodeURIComponent(key)}&limit=1`);
-  return data?.[0] || null;
+function buildSnapshotSummary(content: Record<string, unknown>): string {
+  const house   = (content?.house   || {}) as Record<string, string>;
+  const summary = (content?.summary || {}) as Record<string, number>;
+  const rooms   = (content?.rooms   || []) as Array<Record<string, unknown>>;
+  const parts: string[] = [];
+  if (house.title) parts.push(`${house.title} (${house.primary_language || ''})`);
+  if (summary.seed_rooms   > 0) parts.push(`씨앗방 ${summary.seed_rooms}개`);
+  if (summary.bloomed_seeds > 0) parts.push(`꽃 ${summary.bloomed_seeds}개`);
+  if (summary.total_fruits  > 0) parts.push(`열매 ${summary.total_fruits}개`);
+  if (summary.total_harvested > 0) parts.push(`수확 ${summary.total_harvested}개`);
+  parts.push(`메시지 ${summary.total_messages || 0}개`);
+  const seedRooms = rooms.filter(r => r.seed_mode);
+  if (seedRooms.length > 0)
+    parts.push(`씨앗: ${seedRooms.map(r => r.room_name).join(', ')}`);
+  return parts.join(' · ');
 }
 
-// ── 마당 산하 방 목록 조회 ─────────────────────────────────────────
-async function getRoomsByYardId(yardId: string) {
-  return supabaseGet(
-    `hajun_rooms?yard_id=eq.${yardId}&order=created_at.asc`
-  );
+function buildSnapshotKeywords(content: Record<string, unknown>): string[] {
+  const house   = (content?.house   || {}) as Record<string, string>;
+  const summary = (content?.summary || {}) as Record<string, number>;
+  const rooms   = (content?.rooms   || []) as Array<Record<string, unknown>>;
+  const kw: string[] = ['life', 'CoreNull'];
+  if (house.primary_language) kw.push(`lang_${house.primary_language}`);
+  if (summary.seed_rooms   > 0) kw.push('seed_active');
+  if (summary.bloomed_seeds > 0) kw.push('bloomed');
+  if (summary.total_fruits  > 0) kw.push('fruit');
+  if (summary.total_harvested > 0) kw.push('harvested');
+  if (rooms.some((r: Record<string, unknown>) => r.visibility === 'public'))  kw.push('public_space');
+  if (rooms.some((r: Record<string, unknown>) => r.visibility === 'family'))  kw.push('family_space');
+  if ((summary.total_messages || 0) > 10) kw.push('high_activity');
+  else if ((summary.total_messages || 0) > 0) kw.push('low_activity');
+  else kw.push('inactive');
+  return kw;
 }
 
-// ── room_id 또는 (yard_key + room_key)로 방 하나 확정 ────────────
-async function resolveRoomId(params: {
-  room_id?: string;
-  yard_key?: string;
-  room_key?: string;
-}): Promise<{ room_id?: string; _error?: string }> {
-  if (params.room_id) return { room_id: params.room_id };
-
-  if (!params.yard_key || !params.room_key) {
-    return { _error: 'room_id 또는 (yard_key + room_key)가 필요합니다' };
-  }
-  const yard = await getYardByKey(params.yard_key);
-  if (!yard) return { _error: `마당을 찾을 수 없습니다: ${params.yard_key}` };
-
-  const rooms = await supabaseGet(
-    `hajun_rooms?yard_id=eq.${yard.id}&key=eq.${encodeURIComponent(params.room_key)}&limit=1`
-  );
-  if (!rooms || rooms.length === 0) {
-    return { _error: `방을 찾을 수 없습니다: ${params.yard_key}/${params.room_key}` };
-  }
-  return { room_id: rooms[0].id };
+function calcSnapshotConfidence(snapshot: Record<string, unknown>): number {
+  const summary = ((snapshot.content as Record<string, unknown>)?.summary || {}) as Record<string, number>;
+  const ids = (snapshot.source_message_ids as string[]) || [];
+  let conf = 0.55;
+  if ((summary.total_messages || 0) > 5) conf += 0.10;
+  if ((summary.seed_rooms     || 0) > 0) conf += 0.05;
+  if ((summary.total_fruits   || 0) > 0) conf += 0.05;
+  if (ids.length > 1)                    conf += 0.05;
+  return Math.min(conf, 0.90);
 }
 
-// ── 두뇌 AI 호출: 방의 기록을 그대로 읽혀서 답을 받는다 ───────────
-// context_package 없음. 이 방의 원본 메시지 나열이 곧 맥락이다.
-async function callBrainAI(
-  roomName: string,
-  fullThread: Msg[],
-  targetContent: string,
-  externalRefs: Msg[]
-): Promise<{ text?: string; _error?: string }> {
-  if (!GROQ_KEY) return { _error: 'GROQ_API_KEY 환경변수 미설정' };
-
-  // 방은 전부 저장되어 있지만, 매 호출마다 전부 다시 읽히면 방이 자랄수록
-  // 토큰 한도를 넘는다. 최근 것 위주로만 이번 호출의 맥락을 구성한다.
-  const windowed = fullThread.slice(-THREAD_WINDOW);
-  const omitted = fullThread.length - windowed.length;
-
-  const threadText = windowed
-    .map((m) => {
-      const content = m.content.length > THREAD_MSG_CHAR_LIMIT
-        ? m.content.slice(0, THREAD_MSG_CHAR_LIMIT) + '...(생략)'
-        : m.content;
-      return `[${m.author_type === 'human' ? '사람' : 'AI'}·${m.author_name}·${m.msg_type}] ${content}`;
-    })
-    .join('\n\n');
-
-  const limitedExternal = externalRefs.slice(0, EXTERNAL_REF_LIMIT);
-  const externalText = limitedExternal
-    .map((m) => {
-      const content = m.content.length > EXTERNAL_REF_CHAR_LIMIT
-        ? m.content.slice(0, EXTERNAL_REF_CHAR_LIMIT) + '...(생략)'
-        : m.content;
-      return `[다른 방·${m.author_type === 'human' ? '사람' : 'AI'}·${m.author_name}·${m.msg_type}] ${content}`;
-    })
-    .join('\n\n');
-
-  const prompt = `당신은 지금 "${roomName}" 방에 들어와 있는 하준아이의 참여자입니다.
-당신은 특정 모델에 고정되지 않습니다. 입주자는 언제든 교체될 수 있고, 지금은 당신 차례입니다.
-이 방에 쌓인 기록이 당신의 유일한 맥락입니다. 매번 새로 시작하는 것이 아니라, 이 기록을 딛고 이어가세요.
-이 방의 메시지가 다른 방의 메시지를 참조(ref_ids)하고 있다면, 그 참조된 내용도 아래에 함께 주어집니다 -
-그것도 당신이 실제로 읽은 기록으로 취급하세요.
-${omitted > 0 ? `아래는 이 방의 가장 최근 ${THREAD_WINDOW}개 기록입니다. 이보다 ${omitted}개 더 오래된 기록이 이 방에 있지만 이번엔 생략됐습니다.` : ''}
-
-규칙:
-- 아래 기록(이 방 + 참조된 다른 방)에 없는 내용은 지어내지 말고, 모르면 모른다고 하세요.
-- 마크다운 금지 (**, ##, - 목록 등 쓰지 말 것).
-- 한국어로만, 핵심만 간결하게 답하세요.
-
-=== 이 방의 지난 기록 ===
-${threadText || '(아직 기록 없음)'}
-
-=== 이 방의 메시지가 참조하고 있는, 다른 방의 기록 ===
-${externalText || '(참조된 것 없음)'}
-
-=== 지금 답해야 할 부분 ===
-${targetContent}`;
-
+async function fetchMindWorldSummary(): Promise<string> {
   try {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/corenull_rooms?house_id=eq.${HOUSE_ID}&order=updated_at.desc&limit=5`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, cache: 'no-store' }
+    );
+    if (!res.ok) return '씨앗 데이터 없음';
+    const rooms = await res.json();
+    if (!rooms || rooms.length === 0) return '씨앗 데이터 없음';
+    return rooms
+      .map((r: { name?: string; fruit_state?: string; updated_at?: string }) =>
+        `- ${r.name || '이름없음'} (${r.fruit_state || 'unknown'}) | ${r.updated_at?.slice(0, 10) || ''}`
+      )
+      .join('\n');
+  } catch {
+    return '씨앗 데이터 조회 실패';
+  }
+}
+
+async function fetchOpportunities(ownerKey: string): Promise<{ text: string; ids: string[] }> {
+  if (!ownerKey) return { text: '', ids: [] };
+  try {
+    const res = await fetch(
+      `${COREHUB_URL}/api/corehub/opportunities?owner_key=${encodeURIComponent(ownerKey)}`,
+      { headers: { 'Content-Type': 'application/json' }, cache: 'no-store' }
+    );
+    if (!res.ok) return { text: '', ids: [] };
+    const json = await res.json();
+    const items = json.data || [];
+    if (items.length === 0) return { text: '', ids: [] };
+    const top = items.slice(0, 3);
+    const ids = top.map((o: { id: string }) => o.id);
+    const text = top
+      .map((o: { title?: string; description?: string; opportunity_type?: string }) =>
+        `- ${o.title || o.description || '발견된 기회'} (${o.opportunity_type || 'opportunity'})`
+      )
+      .join('\n');
+    return { text, ids };
+  } catch {
+    return { text: '', ids: [] };
+  }
+}
+
+async function consumeOpportunities(ids: string[], outcome = 'shown'): Promise<void> {
+  if (!ids.length) return;
+  try {
+    await Promise.all(ids.map(id =>
+      fetch(`${COREHUB_URL}/api/corehub/opportunities?id=${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ outcome }),
+      })
+    ));
+  } catch { /* ignore */ }
+}
+
+async function fetchContextSummary(): Promise<string> {
+  try {
+    const data = await supabaseGet('dev_contexts?order=updated_at.desc&limit=1');
+    if (!data || data.length === 0) return '개발 맥락 없음';
+    const c = data[0];
+    const parts: string[] = [];
+    if (c.phase)          parts.push(`페이즈: ${c.phase}`);
+    if (c.status)         parts.push(`상태: ${c.status}`);
+    if (c.last_task)      parts.push(`마지막 작업: ${c.last_task}`);
+    if (c.next_action)    parts.push(`다음 액션: ${c.next_action}`);
+    if (c.current_problems && c.current_problems !== '없음')
+                          parts.push(`현재 문제: ${c.current_problems}`);
+    if (c.summary)        parts.push(`요약: ${c.summary}`);
+    if (Array.isArray(c.next_tasks) && c.next_tasks.length > 0)
+      parts.push(`다음 작업:\n${c.next_tasks.map((t: string) => `  - ${t}`).join('\n')}`);
+    return parts.join('\n') || '맥락 데이터 파싱 실패';
+  } catch {
+    return '개발 맥락 조회 실패';
+  }
+}
+
+async function saveConversation(payload: {
+  source_ai: string;
+  original_message: string;
+  summary: string;
+  keywords: string[];
+  meta?: Record<string, unknown>;
+}) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/hajunai_conversations`, {
       method: 'POST',
       headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${GROQ_KEY}`,
+        Prefer: 'return=minimal',
       },
-      body: JSON.stringify({
-        model: AI_MODEL_API,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.4,
-        max_tokens: 700,
-      }),
+      body: JSON.stringify({ ...payload, created_at: new Date().toISOString() }),
     });
-    if (!res.ok) {
-      const errText = await res.text();
-      return { _error: `두뇌 AI 호출 오류: ${errText}` };
-    }
-    const data = await res.json();
-    const text = data.choices?.[0]?.message?.content || '';
-    return { text };
-  } catch (e: unknown) {
-    return { _error: e instanceof Error ? e.message : String(e) };
-  }
+  } catch { /* ignore */ }
 }
 
-// ═══════════════════════════════════════════════════════════════
+async function callGroq(
+  systemPrompt: string,
+  userMessage: string,
+  history: Array<{ role: string; content: string }>
+) {
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history.map((h) => ({ role: h.role === 'user' ? 'user' : 'assistant', content: h.content })),
+    { role: 'user', content: userMessage },
+  ];
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${GROQ_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages,
+      temperature: 0.4,
+      max_tokens: 1024,
+    }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    return { _error: `Groq API 오류: ${errText}` };
+  }
+  const data = await res.json();
+  const text = data.choices?.[0]?.message?.content || '';
+  return { text };
+}
+
+function parseReply(raw: string): { reply: string; observations: string[] } {
+  const obsMarkers = ['관찰:', '관찰 :', 'Observations:', '관찰사항:'];
+  let splitIdx = -1;
+  let marker = '';
+  for (const m of obsMarkers) {
+    const idx = raw.indexOf(m);
+    if (idx !== -1 && (splitIdx === -1 || idx < splitIdx)) {
+      splitIdx = idx;
+      marker = m;
+    }
+  }
+  if (splitIdx === -1) return { reply: raw.trim(), observations: [] };
+  const reply = raw.slice(0, splitIdx).trim();
+  const obsPart = raw.slice(splitIdx + marker.length).trim();
+  const observations = obsPart
+    .split('\n')
+    .map((l) => l.replace(/^[-–•*]\s*/, '').trim())
+    .filter(Boolean);
+  return { reply, observations };
+}
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const action = searchParams.get('action');
-  const traceId = createTraceId();
 
   try {
-    // ── 마당 목록 ──────────────────────────────────────────────
+    // [CoreNull UI 정리 2026-09-06] 마당은 사용자가 직접 방문한 경우에만 조회한다.
     if (action === 'yard_list') {
-      const data = await supabaseGet('hajun_yards?order=created_at.asc');
-      return Response.json({ payload: data, traceId });
+      const payload = await supabaseGet('hajun_yards?order=created_at.asc');
+      return Response.json({ payload, traceId: createTraceId() });
     }
 
-    // ── 마당 산하 방 목록 ──────────────────────────────────────
     if (action === 'room_list') {
       const yardKey = searchParams.get('yard');
-      if (!yardKey) return Response.json({ _error: 'yard 파라미터 필요', traceId }, { status: 200 });
-
+      if (!yardKey) return Response.json({ _error: 'yard 파라미터 필요' }, { status: 200 });
       const yard = await getYardByKey(yardKey);
-      if (!yard) return Response.json({ _error: `마당을 찾을 수 없습니다: ${yardKey}`, traceId }, { status: 200 });
-
+      if (!yard) return Response.json({ _error: `마당을 찾을 수 없습니다: ${yardKey}` }, { status: 200 });
       const rooms = await getRoomsByYardId(yard.id);
-      return Response.json({ payload: { yard, rooms }, traceId });
+      return Response.json({ payload: { yard, rooms }, traceId: createTraceId() });
     }
 
-    // ── 방 뷰: 방 하나의 전체 메시지 이력 (깊게) ──────────────
     if (action === 'view_room') {
       const roomId = searchParams.get('room_id');
-      if (!roomId) return Response.json({ _error: 'room_id 파라미터 필요', traceId }, { status: 200 });
-
+      if (!roomId) return Response.json({ _error: 'room_id 파라미터 필요' }, { status: 200 });
       const room = await supabaseGet(`hajun_rooms?id=eq.${roomId}&limit=1`);
-      if (!room || room.length === 0) {
-        return Response.json({ _error: `방을 찾을 수 없습니다: ${roomId}`, traceId }, { status: 200 });
+      if (!room?.length) return Response.json({ _error: `방을 찾을 수 없습니다: ${roomId}` }, { status: 200 });
+      const messages = await supabaseGet(`hajun_messages?room_id=eq.${roomId}&order=created_at.asc`);
+      return Response.json({ payload: { room: room[0], messages }, traceId: createTraceId() });
+    }
+
+    if (action === 'view_livingroom' || action === 'view_yard') {
+      const yardKey = searchParams.get('yard');
+      if (!yardKey) return Response.json({ _error: 'yard 파라미터 필요' }, { status: 200 });
+      const yard = await getYardByKey(yardKey);
+      if (!yard) return Response.json({ _error: `마당을 찾을 수 없습니다: ${yardKey}` }, { status: 200 });
+      const rooms = await getRoomsByYardId(yard.id);
+      const limit = action === 'view_livingroom' ? Number(searchParams.get('limit') || '5') : 1;
+      const withMessages = await Promise.all((rooms || []).map(async (room: { id: string }) => {
+        const messages = await supabaseGet(`hajun_messages?room_id=eq.${room.id}&order=created_at.desc&limit=${limit}`);
+        return action === 'view_yard'
+          ? { ...room, latest: messages?.[0] || null }
+          : { ...room, messages };
+      }));
+      return Response.json({ payload: { yard, rooms: withMessages }, traceId: createTraceId() });
+    }
+
+    if (action === 'contexts') {
+      const data = await supabaseGet(
+        'contexts?order=updated_at.desc&limit=1' +
+        '&select=id,person_id,device_id,understanding,confidence_map,' +
+        'knowledge_unit_ids,evolution,last_synthesized_at,updated_at'
+      );
+      return Response.json({ payload: data[0] || null });
+    }
+
+    if (action === 'dev_contexts') {
+      const data = await supabaseGet('dev_contexts?order=updated_at.desc&limit=1');
+      return Response.json({ payload: data[0] || null });
+    }
+
+    if (action === 'snapshots') {
+      const limit = searchParams.get('limit') || '20';
+      const aiFilter = searchParams.get('ai');
+      let path = `hajunai_conversations?order=created_at.desc&limit=${limit}`;
+      if (aiFilter) path += `&source_ai=eq.${encodeURIComponent(aiFilter)}`;
+      const data = await supabaseGet(path);
+      return Response.json({ payload: data });
+    }
+
+    if (action === 'sync_snapshot') {
+      const houseId = searchParams.get('house_id');
+      if (!houseId) return Response.json({ _error: 'house_id 필요' }, { status: 200 });
+      const snapshots = await supabaseGet(
+        `house_snapshots?house_id=eq.${houseId}&order=derived_at.desc&limit=1`
+      );
+      if (!snapshots || snapshots.length === 0) {
+        return Response.json({ _error: 'Snapshot 없음', traceId: createTraceId() }, { status: 200 });
       }
-
-      const messages = await supabaseGet(
-        `hajun_messages?room_id=eq.${roomId}&order=created_at.asc`
+      const snapshot = snapshots[0];
+      const existing = await supabaseGet(
+        `hajunai_conversations?meta->>snapshot_id=eq.${snapshot.id}&limit=1&select=id`
       );
-      return Response.json({ payload: { room: room[0], messages }, traceId });
+      if (existing && existing.length > 0) {
+        return Response.json({ skipped: true, reason: '이미 변환됨', traceId: createTraceId() }, { status: 200 });
+      }
+      const summary    = buildSnapshotSummary(snapshot.content);
+      const keywords   = buildSnapshotKeywords(snapshot.content);
+      const confidence = calcSnapshotConfidence(snapshot);
+      const knowledgeUnit = {
+        source_ai:    'CoreNull',
+        source_core:  'CoreNull',
+        knowledge_type: 'life',
+        original_message: JSON.stringify(snapshot.content).slice(0, 2000),
+        summary,
+        keywords,
+        confidence,
+        observed_at:  snapshot.content?.last_activity || snapshot.derived_at,
+        derived_at:   snapshot.derived_at,
+        derived_version: String(snapshot.derived_version),
+        derived_by:   snapshot.derived_by || 'CoreNull',
+        source_message_ids: snapshot.source_message_ids || [],
+        meta: {
+          snapshot_id:   snapshot.id,
+          house_id:      snapshot.house_id,
+          snapshot_type: snapshot.snapshot_type,
+          house_title:   snapshot.content?.house?.title || '',
+        },
+      };
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/hajunai_conversations`, {
+        method: 'POST',
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify(knowledgeUnit),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        return Response.json({ _error: `저장 실패: ${err}`, traceId: createTraceId() }, { status: 200 });
+      }
+      const saved = await res.json();
+      return Response.json({ id: saved[0]?.id, traceId: createTraceId() }, { status: 200 });
     }
 
-    // ── 거실 뷰: 마당 산하 각 방의 최신 N개씩 ──────────────────
-    if (action === 'view_livingroom') {
-      const yardKey = searchParams.get('yard');
-      const limit = Number(searchParams.get('limit') || '5');
-      if (!yardKey) return Response.json({ _error: 'yard 파라미터 필요', traceId }, { status: 200 });
-
-      const yard = await getYardByKey(yardKey);
-      if (!yard) return Response.json({ _error: `마당을 찾을 수 없습니다: ${yardKey}`, traceId }, { status: 200 });
-
-      const rooms = await getRoomsByYardId(yard.id);
-      const withMessages = await Promise.all(
-        (rooms || []).map(async (room: { id: string }) => {
-          const messages = await supabaseGet(
-            `hajun_messages?room_id=eq.${room.id}&order=created_at.desc&limit=${limit}`
-          );
-          return { ...room, messages };
-        })
-      );
-
-      return Response.json({ payload: { yard, rooms: withMessages }, traceId });
+    // context_package was retired. Use GET /api/docs?agent=... for explicit documents.
+    if (action === 'context_package') {
+      return Response.json({
+        _error: 'context_package는 폐기되었습니다. GET /api/docs?agent=clo2|clo3|pm을 사용하세요.',
+      }, { status: 200 });
     }
 
-    // ── 마당 뷰: 마당 산하 각 방의 최신 1개씩만 (가장 얕고 넓게) ─
-    if (action === 'view_yard') {
-      const yardKey = searchParams.get('yard');
-      if (!yardKey) return Response.json({ _error: 'yard 파라미터 필요', traceId }, { status: 200 });
-
-      const yard = await getYardByKey(yardKey);
-      if (!yard) return Response.json({ _error: `마당을 찾을 수 없습니다: ${yardKey}`, traceId }, { status: 200 });
-
-      const rooms = await getRoomsByYardId(yard.id);
-      const withLatest = await Promise.all(
-        (rooms || []).map(async (room: { id: string }) => {
-          const messages = await supabaseGet(
-            `hajun_messages?room_id=eq.${room.id}&order=created_at.desc&limit=1`
-          );
-          return { ...room, latest: messages?.[0] || null };
-        })
-      );
-
-      return Response.json({ payload: { yard, rooms: withLatest }, traceId });
-    }
-
-    return Response.json({ _error: '알 수 없는 action', traceId }, { status: 200 });
+    return Response.json({ _error: '알 수 없는 action' }, { status: 200 });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    return Response.json({ _error: msg, traceId }, { status: 500 });
+    return Response.json({ _error: msg }, { status: 500 });
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
 export async function POST(req: Request) {
   const { searchParams } = new URL(req.url);
   const action = searchParams.get('action');
@@ -334,142 +390,307 @@ export async function POST(req: Request) {
     const rawBody = await req.text();
     const body = JSON.parse(rawBody.replace(/^\uFEFF/, ''));
 
-    // ── 메시지 작성: 참여자가 방에 포스팅 ─────────────────────
+    // [CoreNull UI 정리 2026-09-06] 명시적으로 방을 방문한 사용자의 메시지만 저장한다.
     if (action === 'post_message') {
-      const {
-        room_id, yard_key, room_key,
-        author_type, author_name, msg_type, content, ref_ids = [],
-      } = body as {
-        room_id?: string; yard_key?: string; room_key?: string;
-        author_type?: string; author_name?: string;
+      const { room_id, author_type, author_name, msg_type, content, ref_ids = [] } = body as {
+        room_id?: string; author_type?: string; author_name?: string;
         msg_type?: string; content?: string; ref_ids?: string[];
       };
-
-      if (!author_type || !AUTHOR_TYPES.includes(author_type as typeof AUTHOR_TYPES[number])) {
-        return Response.json({ _error: `author_type은 ${AUTHOR_TYPES.join('|')} 중 하나여야 합니다`, traceId }, { status: 200 });
+      const validAuthors = ['human', 'ai'];
+      const validTypes = ['doc_injection', 'understanding', 'question', 'answer', 'decision', 'issue', 'work_result'];
+      if (!room_id || !author_type || !validAuthors.includes(author_type) || !author_name || !msg_type || !validTypes.includes(msg_type) || !content?.trim()) {
+        return Response.json({ _error: 'room_id, author_type, author_name, msg_type, content가 필요합니다', traceId }, { status: 200 });
       }
-      if (!author_name || typeof author_name !== 'string') {
-        return Response.json({ _error: 'author_name 필요', traceId }, { status: 200 });
-      }
-      if (!msg_type || !MSG_TYPES.includes(msg_type as typeof MSG_TYPES[number])) {
-        return Response.json({ _error: `msg_type은 ${MSG_TYPES.join('|')} 중 하나여야 합니다`, traceId }, { status: 200 });
-      }
-      if (!content || typeof content !== 'string' || content.trim() === '') {
-        return Response.json({ _error: 'content 필요', traceId }, { status: 200 });
-      }
-      if (!Array.isArray(ref_ids)) {
-        return Response.json({ _error: 'ref_ids는 배열이어야 합니다', traceId }, { status: 200 });
-      }
-
-      const resolved = await resolveRoomId({ room_id, yard_key, room_key });
-      if (resolved._error) {
-        return Response.json({ _error: resolved._error, traceId }, { status: 200 });
-      }
-
-      const result = await supabaseInsert('hajun_messages', {
-        room_id: resolved.room_id,
-        author_type,
-        author_name,
-        msg_type,
-        content,
-        ref_ids,
-      });
-      if (result._error) {
-        return Response.json({ _error: result._error, traceId }, { status: 200 });
-      }
-
-      return Response.json({ payload: result.data?.[0] || null, traceId });
+      if (!Array.isArray(ref_ids)) return Response.json({ _error: 'ref_ids는 배열이어야 합니다', traceId }, { status: 200 });
+      const saved = await insertHajunMessage({ room_id, author_type, author_name, msg_type, content: content.trim(), ref_ids });
+      if (saved._error) return Response.json({ _error: saved._error, traceId }, { status: 200 });
+      return Response.json({ payload: saved.data?.[0] || null, traceId }, { status: 200 });
     }
 
-    // ── 새 방 생성 (마당 산하, 방은 고정 — 신중하게 생성) ──────
-    if (action === 'room_create') {
-      const { yard_key, key, name } = body as { yard_key?: string; key?: string; name?: string };
-
-      if (!yard_key || !key || !name) {
-        return Response.json({ _error: 'yard_key, key, name 모두 필요', traceId }, { status: 200 });
-      }
-
-      const yard = await getYardByKey(yard_key);
-      if (!yard) return Response.json({ _error: `마당을 찾을 수 없습니다: ${yard_key}`, traceId }, { status: 200 });
-
-      const result = await supabaseInsert('hajun_rooms', {
-        yard_id: yard.id,
-        key,
-        name,
-      });
-      if (result._error) {
-        return Response.json({ _error: result._error, traceId }, { status: 200 });
-      }
-
-      return Response.json({ payload: result.data?.[0] || null, traceId });
-    }
-
-    // ── 두뇌 AI 참여: 방을 읽고 답을 남긴다 ─────────────────────
-    // body: {
-    //   room_id, yard_key?, room_key?,
-    //   ref_ids: string[]   ← "이 메시지들 보고 답해줘" (사람이 명시적으로 지정)
-    // }
-    // - context_package 없음. AI는 이 방의 전체 원본 메시지를 그대로 읽는다.
-    // - ref_ids가 비어있으면 방의 가장 최근 메시지를 대상으로 삼는다.
-    // - 응답은 author_type:'ai', author_name: 현재 입주 모델명으로 저장된다.
     if (action === 'ai_respond') {
-      const { room_id, yard_key, room_key, ref_ids = [] } = body as {
-        room_id?: string; yard_key?: string; room_key?: string; ref_ids?: string[];
-      };
-
-      const resolved = await resolveRoomId({ room_id, yard_key, room_key });
-      if (resolved._error) {
-        return Response.json({ _error: resolved._error, traceId }, { status: 200 });
-      }
-      const roomId = resolved.room_id!;
-
-      const roomData = await supabaseGet(`hajun_rooms?id=eq.${roomId}&limit=1`);
-      if (!roomData || roomData.length === 0) {
-        return Response.json({ _error: `방을 찾을 수 없습니다: ${roomId}`, traceId }, { status: 200 });
-      }
-      const room = roomData[0];
-
-      // 방을 스스로 읽는다 — 이게 context_package를 대체하는 전부다.
-      const thread: Msg[] = await supabaseGet(
-        `hajun_messages?room_id=eq.${roomId}&order=created_at.asc`
-      );
-
-      if (!thread || thread.length === 0) {
-        return Response.json({ _error: '이 방에 아직 기록이 없어 답할 근거가 없습니다', traceId }, { status: 200 });
-      }
-
-      // 이 방의 메시지들이 다른 방을 ref_ids로 가리키고 있다면 실제로 따라가서 읽는다.
-      const externalRefs = await fetchExternalRefs(thread);
-
-      // 지금 답해야 할 부분: 사람이 지정한 ref_ids가 있으면 그 메시지들,
-      // 없으면 방의 가장 최근 메시지.
-      let targetMsgs = thread.filter((m) => ref_ids.includes(m.id));
-      if (targetMsgs.length === 0) {
-        targetMsgs = [thread[thread.length - 1]];
-      }
-      const targetContent = targetMsgs
-        .map((m) => `[${m.author_name}] ${m.content}`)
-        .join('\n');
-      const effectiveRefIds = targetMsgs.map((m) => m.id);
-
-      const aiResult = await callBrainAI(room.name, thread, targetContent, externalRefs);
-      if (aiResult._error) {
-        return Response.json({ _error: aiResult._error, traceId }, { status: 200 });
-      }
-
-      const insertResult = await supabaseInsert('hajun_messages', {
-        room_id: roomId,
-        author_type: 'ai',
-        author_name: AI_MODEL_NAME,
-        msg_type: 'answer',
-        content: aiResult.text,
-        ref_ids: effectiveRefIds,
+      const { room_id, ref_ids = [] } = body as { room_id?: string; ref_ids?: string[] };
+      if (!room_id) return Response.json({ _error: 'room_id 필요', traceId }, { status: 200 });
+      if (!GROQ_KEY) return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
+      const messages = await supabaseGet(`hajun_messages?room_id=eq.${room_id}&order=created_at.desc&limit=8`);
+      const thread = [...(messages || [])].reverse();
+      const prompt = [
+        '당신은 하준아이 마당의 방에 참여한 AI입니다. 아래 방 기록만 근거로 한국어로 간결하게 답하세요.',
+        '마크다운 목록과 확인되지 않은 추측은 사용하지 마세요.',
+        `참조 메시지 ID: ${Array.isArray(ref_ids) && ref_ids.length ? ref_ids.join(', ') : '없음'}`,
+        '=== 방 기록 ===',
+        thread.map((m: { author_name: string; msg_type: string; content: string }) => `[${m.author_name}/${m.msg_type}] ${m.content}`).join('\n'),
+        '=== 답변 ===',
+      ].join('\n');
+      const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
+        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: prompt }], temperature: 0.4, max_tokens: 700 }),
       });
-      if (insertResult._error) {
-        return Response.json({ _error: insertResult._error, traceId }, { status: 200 });
+      if (!aiRes.ok) return Response.json({ _error: `AI 호출 실패: ${await aiRes.text()}`, traceId }, { status: 200 });
+      const aiJson = await aiRes.json();
+      const text = aiJson.choices?.[0]?.message?.content?.trim();
+      if (!text) return Response.json({ _error: 'AI 답변이 비어 있습니다', traceId }, { status: 200 });
+      const saved = await insertHajunMessage({ room_id, author_type: 'ai', author_name: 'HajunAI', msg_type: 'answer', content: text, ref_ids: Array.isArray(ref_ids) ? ref_ids : [] });
+      if (saved._error) return Response.json({ _error: saved._error, traceId }, { status: 200 });
+      return Response.json({ payload: saved.data?.[0] || null, traceId }, { status: 200 });
+    }
+
+    if (action === 'update_context') {
+      const { id, ...fields } = body;
+      if (!id) return Response.json({ _error: 'id 필요', traceId }, { status: 200 });
+      const data = await supabasePatch('dev_contexts', id, {
+        ...fields,
+        updated_at: new Date().toISOString(),
+      });
+      return Response.json({ payload: data[0] || null, traceId });
+    }
+
+    if (action === 'chat') {
+      const { message, history = [], owner_key = '' } = body as {
+        message: string;
+        history: Array<{ role: string; content: string }>;
+        owner_key?: string;
+      };
+      if (!message || typeof message !== 'string' || message.trim() === '') {
+        return Response.json({ _error: '메시지가 비어있습니다', traceId }, { status: 200 });
+      }
+      if (!GROQ_KEY) {
+        return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
+      }
+      const [contextSummary, mindWorldSummary, opportunities] = await Promise.all([
+        fetchContextSummary(),
+        fetchMindWorldSummary(),
+        fetchOpportunities(owner_key),
+      ]);
+      const opportunitySection = opportunities.text
+        ? `\n발견된 기회 (CoreHub Publish):\n${opportunities.text}\n이 기회들은 강요하지 말고, 대화 흐름에서 자연스럽게 언급할 것.`
+        : '';
+      const systemPrompt = `당신은 HajunAI입니다. BRAINPOOL 프로젝트의 개인 전략 비서입니다.
+질문에 단순히 답하는 AI가 아니라, 프로젝트와 삶의 흐름을 이해하고
+현재 상태를 분석하여 다음에 필요한 것을 알려주는 비서입니다.
+
+규칙:
+- 핵심만 간결하게 답하세요.
+- 마크다운 금지 (**, ##, - 목록 등 사용하지 말 것).
+- 한국어로만 답하세요.
+- 제안은 하되 강요하지 않습니다. 사용자 대신 결정하지 않습니다.
+- 필요하다고 판단되면 답변 끝에 "관찰:" 섹션을 추가하세요.
+  형식: 관찰:\n- 항목1\n- 항목2${opportunitySection}
+
+현재 개발 맥락:
+${contextSummary}
+
+현재 씨앗/공간 상태 (MindWorld):
+${mindWorldSummary}`;
+      const groqResult = await callGroq(systemPrompt, message.trim(), history);
+      if (groqResult._error) {
+        return Response.json({ _error: groqResult._error, traceId }, { status: 200 });
+      }
+      const { reply, observations } = parseReply(groqResult.text || '');
+      if (opportunities.ids.length > 0) {
+        consumeOpportunities(opportunities.ids, 'shown');
+      }
+      const chatMeta = opportunities.ids.length > 0
+        ? { opportunity_ids: opportunities.ids, used_at: new Date().toISOString(), trace_id: traceId }
+        : undefined;
+      saveConversation({
+        source_ai: 'HajunAI',
+        original_message: `[사용자] ${message}\n[HajunAI] ${reply}`,
+        summary: reply.slice(0, 100),
+        keywords: ['chat', 'hajunai'],
+        ...(chatMeta && { meta: chatMeta }),
+      });
+      return Response.json({ reply, observations, traceId });
+    }
+
+    if (action === 'summarize_context') {
+      if (!GEMINI_KEY) {
+        return Response.json({ _error: 'GEMINI_API_KEY 환경변수 미설정', traceId }, { status: 200 });
+      }
+      function cleanText(text: string, maxLen = 200): string {
+        return (text || '')
+          .replace(/\*\*(.+?)\*\*/g, '$1')
+          .replace(/#{1,6}\s/g, '')
+          .replace(/[\u0060]{1,3}[^\u0060\n]*[\u0060]{1,3}/g, '')
+          .replace(/\n{3,}/g, '\n\n')
+          .replace(/[\u0000-\u001F]/g, ' ')
+          .trim()
+          .slice(0, maxLen);
+      }
+      let devContextBlock = '개발 맥락 없음';
+      try {
+        const devData = await supabaseGet('dev_contexts?order=updated_at.desc&limit=1');
+        if (devData && devData.length > 0) {
+          const d = devData[0];
+          const lines: string[] = [];
+          if (d.phase)        lines.push(`페이즈: ${d.phase}`);
+          if (d.status)       lines.push(`상태: ${d.status}`);
+          if (d.last_task)    lines.push(`마지막 작업: ${cleanText(d.last_task, 100)}`);
+          if (d.next_action)  lines.push(`다음 액션: ${cleanText(d.next_action, 100)}`);
+          if (d.current_problems && d.current_problems !== '없음')
+                              lines.push(`현재 문제: ${cleanText(d.current_problems, 100)}`);
+          if (d.summary)      lines.push(`기존 요약: ${cleanText(d.summary, 150)}`);
+          if (Array.isArray(d.completed_tasks) && d.completed_tasks.length > 0)
+            lines.push(`완료: ${d.completed_tasks.slice(0, 5).map((t: string) => cleanText(t, 60)).join(' / ')}`);
+          if (Array.isArray(d.next_tasks) && d.next_tasks.length > 0)
+            lines.push(`예정: ${d.next_tasks.slice(0, 5).map((t: string) => cleanText(t, 60)).join(' / ')}`);
+          devContextBlock = lines.join('\n');
+        }
+      } catch { devContextBlock = '개발 맥락 조회 실패'; }
+
+      let conversationBlock = '대화 없음';
+      try {
+        const convData = await supabaseGet(
+          'hajunai_conversations?order=created_at.desc&limit=30' +
+          '&select=original_message,source_ai,source_core,knowledge_type,summary,keywords,created_at'
+        );
+        if (!convData || convData.length === 0) {
+          return Response.json({ _error: '저장된 대화가 없습니다', traceId }, { status: 200 });
+        }
+        const byType: Record<string, typeof convData> = {};
+        for (const c of convData) {
+          const t = c.knowledge_type || 'raw';
+          if (!byType[t]) byType[t] = [];
+          byType[t].push(c);
+        }
+        const sections: string[] = [];
+        if (byType['raw'] && byType['raw'].length > 0) {
+          sections.push('[최근 대화]');
+          const lines = byType['raw']
+            .slice(0, 15)
+            .reverse()
+            .map((c: { created_at?: string; summary?: string; original_message?: string }) => {
+              const date    = c.created_at?.slice(0, 10) || '';
+              const content = cleanText(c.summary || c.original_message || '', 120);
+              return `${date} | ${content}`;
+            });
+          sections.push(lines.join('\n'));
+        }
+        for (const type of ['language', 'context', 'life', 'pattern'] as const) {
+          if (byType[type] && byType[type].length > 0) {
+            const label: Record<string, string> = {
+              language: '언어 이해', context: '대화 맥락',
+              life: '생활 패턴', pattern: '발견된 패턴'
+            };
+            sections.push(`[Knowledge - ${label[type]}]`);
+            sections.push(
+              byType[type]
+                .map((c: { summary?: string }) => `• ${cleanText(c.summary || '', 100)}`)
+                .join('\n')
+            );
+          }
+        }
+        conversationBlock = sections.join('\n');
+      } catch {
+        return Response.json({ _error: '대화 데이터 조회 실패', traceId }, { status: 200 });
       }
 
-      return Response.json({ payload: insertResult.data?.[0] || null, traceId });
+      const mindWorldSummary = await fetchMindWorldSummary();
+      const summarizePrompt = `You are a JSON-only output machine.
+CRITICAL: Output ONLY a single valid JSON object. No markdown. No code fences. No explanation. No newlines inside string values.
+
+Output exactly this JSON structure with all 8 fields:
+{"last_task":"...","summary":"...","next_action":"...","current_problems":"...","development_summary":"...","conversation_summary":"...","decisions":"...","risks":"..."}
+
+STRICT RULES:
+1. Every value must be a single line string (NO newlines, NO line breaks inside values)
+2. Use comma(,) as separator between points, NOT newlines
+3. Korean only
+4. last_task: 최근 핵심 작업 (80자 이내)
+5. summary: 프로젝트 현재 상태 (200자 이내)
+6. next_action: 지금 당장 할 것
+7. current_problems: 현재 블로커 (없으면 정확히 "없음")
+8. development_summary: 개발 진행 상황 (200자 이내)
+9. conversation_summary: 최근 논의 핵심 (150자 이내)
+10. decisions: 확정된 설계 결정 (없으면 정확히 "없음")
+11. risks: 주의사항 (없으면 정확히 "없음")
+
+=== 개발 현황 (dev_contexts) ===
+${devContextBlock}
+
+=== 최근 대화 및 Knowledge ===
+${conversationBlock}
+
+=== MindWorld 씨앗 상태 ===
+${mindWorldSummary}`;
+
+      const geminiRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: summarizePrompt }] }],
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 4096,
+              responseMimeType: 'application/json',
+            },
+          }),
+        }
+      );
+      if (!geminiRes.ok) {
+        const errText = await geminiRes.text();
+        return Response.json({ _error: `Gemini 오류: ${errText}`, traceId }, { status: 200 });
+      }
+      const geminiData = await geminiRes.json();
+      const parts = geminiData.candidates?.[0]?.content?.parts || [];
+      const rawText = parts
+        .filter((p: { thought?: boolean; text?: string }) => !p.thought && typeof p.text === 'string')
+        .map((p: { text: string }) => p.text)
+        .join('');
+
+      const FIELDS = ['last_task','summary','next_action','current_problems',
+                      'development_summary','conversation_summary','decisions','risks'];
+      let parsed: Record<string, string> = {};
+      let parseOk = false;
+      try {
+        const cleaned = rawText.replace(/[\u0000-\u001F&&[^\r\n\t]]/g, ' ').replace(/,\s*([\]}])/g, '$1');
+        const objMatch = cleaned.match(/\{[\s\S]*\}/);
+        if (objMatch) {
+          parsed = JSON.parse(objMatch[0]);
+          parseOk = FIELDS.some(f => parsed[f]);
+        }
+      } catch { /* next */ }
+      if (!parseOk) {
+        try {
+          const inlined = rawText
+            .replace(/("(?:[^"\\]|\\.)*")/g, (m: string) => m.replace(/\n/g, ' ').replace(/\r/g, ''))
+            .replace(/,\s*([\]}])/g, '$1');
+          const objMatch = inlined.match(/\{[\s\S]*\}/);
+          if (objMatch) {
+            parsed = JSON.parse(objMatch[0]);
+            parseOk = FIELDS.some(f => parsed[f]);
+          }
+        } catch { /* next */ }
+      }
+      if (!parseOk) {
+        const extract = (key: string) => {
+          const m = rawText.match(new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+          return m ? m[1].replace(/\\n/g, ' ').replace(/\\"/g, '"').trim() : '';
+        };
+        for (const f of FIELDS) parsed[f] = extract(f);
+        parseOk = FIELDS.some(f => parsed[f]);
+      }
+      if (!parseOk) {
+        return Response.json({ _error: 'Gemini 응답 파싱 실패', raw: rawText.slice(0, 500), traceId }, { status: 200 });
+      }
+      for (const f of ['current_problems','decisions','risks']) {
+        if (!parsed[f]) parsed[f] = '없음';
+      }
+      return Response.json({
+        summary: {
+          last_task:            parsed.last_task            || '',
+          summary:              parsed.summary              || '',
+          next_action:          parsed.next_action          || '',
+          current_problems:     parsed.current_problems     || '없음',
+          development_summary:  parsed.development_summary  || '',
+          conversation_summary: parsed.conversation_summary || '',
+          decisions:            parsed.decisions            || '없음',
+          risks:                parsed.risks                || '없음',
+        },
+        traceId,
+      });
     }
 
     return Response.json({ _error: '알 수 없는 action', traceId }, { status: 200 });
