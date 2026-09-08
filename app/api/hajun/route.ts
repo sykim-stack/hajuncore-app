@@ -503,7 +503,7 @@ export async function POST(req: Request) {
       if (!GROQ_KEY) return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
       const [contextSummary, yardContext] = await Promise.all([fetchContextSummary(), fetchYardContext()]);
       const result = await callGroq(
-        `당신은 BRAINPOOL OS 개발 모드 HajunAI입니다. 관제·개발·브라이언풀 마당의 명시적 맥락과 개발 상태를 근거로 답하세요. 마당 메시지의 최신 기록을 오래된 dev_contexts 요약보다 우선하세요. 현재 시점과 맞지 않는 Step 3, CoreRing, 미완료 안내는 기록 시각을 밝혀 과거 기록으로 구분하세요. 모르는 것은 모른다고 하고 한국어로 간결하게 답하세요.
+        `당신은 BRAINPOOL OS 개발 모드 HajunAI입니다. 관제·개발·브라이언풀 마당의 명시적 맥락과 개발 상태를 근거로 답하세요. 마당 메시지의 최신 기록을 오래된 dev_contexts 요약보다 우선하세요. 현재 시점과 맞지 않는 Step 3, CoreRing, 미완료 안내는 기록 시각을 밝혀 과거 기록으로 구분하세요. context_package는 폐기된 경로이므로 현재 기능으로 말하지 마세요. 사람이 확인했다는 표시가 없는 AI 답변은 adopted/검토 대기로 취급하고 confirmed 결정으로 말하지 마세요. 모르는 것은 모른다고 하고 한국어로 간결하게 답하세요.
 개발 상태:
 ${contextSummary}
 하준아이 마당 맥락:
@@ -552,6 +552,9 @@ ${yardContext}`,
 - 하준아이 마당 메시지는 명시적으로 조회한 원본 기록이며 오래된 dev_contexts 요약보다 우선합니다.
 - 기록 시각이 없는 내용은 현재 상태로 단정하지 마세요.
 - 과거 Step 3, CoreRing, 번역, 음성 관련 요약이 최신 마당 기록과 다르면 과거 기록으로 구분하세요.${opportunitySection}
+- context_package는 폐기된 호환 경로입니다. 에이전트 문서·계약은 /api/docs?agent=...를 사용한다고 설명하세요.
+- confirmed_by_human=true인 기록만 사람이 확인한 결정으로 취급하세요. adopted 또는 AI 작성 답변은 검토 대기 기록입니다.
+- 오래된 요약과 최신 원문이 충돌하면 최신 원문을 우선하되, 기록 시각과 충돌 사실을 밝혀 과도하게 확정하지 마세요.
 
 현재 개발 맥락:
 ${contextSummary}
