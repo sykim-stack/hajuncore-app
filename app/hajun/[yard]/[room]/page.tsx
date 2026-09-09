@@ -58,7 +58,22 @@ function ProductMessage({ message, duplicateCount = 1 }: { message: HajunMessage
   const [expanded, setExpanded] = useState(false);
   const meta = message.metadata || {};
   const isProduct = meta.entity_type === 'product_candidate';
-  if (!isProduct) return <div style={S.content}>{message.content}</div>;
+  if (!isProduct) {
+    const preview = message.content.trim();
+    const clipped = preview.length > 260;
+    return (
+      <div>
+        <div style={S.content}>{expanded || !clipped ? preview : `${preview.slice(0, 260)}…`}</div>
+        {clipped && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            style={{ display: 'block', marginTop: 10, padding: '5px 9px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
+          >{expanded ? '원문 접기' : '원문 전체 보기'}</button>
+        )}
+      </div>
+    );
+  }
   const code = String(meta.internal_code || '').replace(/^onchannel:/, '');
   const name = String(meta.name || '') || (message.content.match(/제품명\s*\n([^\n]+)/)?.[1] || '상품명 확인 필요');
   const price = message.content.match(/판매사가\s*\n?([0-9,]+원)/)?.[1] || message.content.match(/판매사가\s*([0-9,]+원)/)?.[1] || '';
