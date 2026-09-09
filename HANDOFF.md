@@ -144,3 +144,12 @@ AI 분석은 판매 승인과 다르다. 사람의 확정 전에는 CoreHub 운�
 - 검증: `npm run build` 통과, `npm run test:product-validation` 5개 통과, `git diff --check` 통과
 - 다음 작업: 실제 DB의 metadata 컬럼 유무와 상품검증마당·방 key를 확인하고 캡처 저장 계약을 연결
 - 주의: 현재 DB에 `metadata` 컬럼이 없으면 후보 목록은 빈 목록을 반환하며 기존 메시지 조회는 유지됨
+
+### 작업 로그: 2026-09-09 10:03
+- 담당: Manus 2
+- 작업: `brainpool-core-final`과 상품검증 공통 연동 계약을 맞추고 코어 파이널을 원격 `master`와 동기화
+- 변경 파일: `docs/HAJUNAI_PRODUCT_EXTENSION_CONTRACT.md`, 코어 파이널 `HANDOFF.md`, `hajunai-api-spec.json`
+- 결정: 두 저장소 모두 `master` 기준; 확장 프로그램은 수동 캡처만 담당하고 상품 원본·중복 판정·이력은 HajunAI `hajun_messages`가 담당
+- 검증: 코어 파이널 로컬을 원격 `4b5d4e8`까지 fast-forward; 공통 API·payload 계약 문서화
+- 다음 작업: HajunAI DB의 `metadata` 컬럼과 상품검증마당·방 key를 확인한 뒤 양쪽 캡처 저장 API를 연결
+- 주의: 저장 계약 확정 전 온채널·네이버 추출기를 먼저 구현하지 않음
