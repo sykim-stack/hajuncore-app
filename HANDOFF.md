@@ -125,3 +125,12 @@ AI 분석은 판매 승인과 다르다. 사람의 확정 전에는 CoreHub 운�
 - 검증: 기존 master 빌드 통과, 세 마당 API 조회 통과, 폐기 API 안내 통과, 확장 프로그램 문법 검증 통과
 - 다음 작업: DB 스키마와 기존 마당 key를 먼저 확인한 뒤 상품검증 MVP의 읽기·중복 판정 테스트를 추가
 - 주의: 상품별 방·별도 products 테이블·두 원본 자동 복제를 만들지 않음
+
+### 작업 로그: 2026-09-09 09:24
+- 담당: Manus 2
+- 작업: 상품 후보 식별·중복 판정의 순수 모듈과 자동 테스트 추가
+- 변경 파일: `lib/productValidation.ts`, `lib/productValidation.test.ts`, `package.json`
+- 결정: `internal_code = source:source_product_code`; 중복 후보는 대표 원문 ID 하나만 선택하며 원문을 복제하지 않음
+- 검증: `npm run test:product-validation` 5개 통과, `git diff --check` 통과
+- 다음 작업: 실제 `hajun_messages` 컬럼과 상품검증마당·방 key를 DB에서 확인한 뒤 API 연결
+- 주의: 현재 모듈은 순수 로직만 제공하며 DB 저장·상품검증마당 시드는 아직 추가하지 않음
