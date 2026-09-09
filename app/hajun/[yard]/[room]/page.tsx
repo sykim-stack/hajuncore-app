@@ -54,6 +54,35 @@ function fmtTime(iso: string) {
   return d.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+function ProductMessage({ message, duplicateCount = 1 }: { message: HajunMessage; duplicateCount?: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const meta = message.metadata || {};
+  const isProduct = meta.entity_type === 'product_candidate';
+  if (!isProduct) return <div style={S.content}>{message.content}</div>;
+  const code = String(meta.internal_code || '').replace(/^onchannel:/, '');
+  const name = String(meta.name || '') || (message.content.match(/제품명\s*\n([^\n]+)/)?.[1] || '상품명 확인 필요');
+  const price = message.content.match(/판매사가\s*\n?([0-9,]+원)/)?.[1] || message.content.match(/판매사가\s*([0-9,]+원)/)?.[1] || '';
+  const sourceUrl = String(meta.source_url || '');
+  return (
+    <div>
+      <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>{name}</div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11, color: 'var(--text2)' }}>
+        <span>상품코드: <b>{code || '확인 필요'}</b></span>
+        {price && <span>공급가: <b>{price}</b></span>}
+        <span style={{ color: '#3FB950' }}>상품 후보</span>
+        {duplicateCount > 1 && <span style={{ color: '#F0883E' }}>같은 상품 캡처 {duplicateCount}건</span>}
+      </div>
+      {sourceUrl && <a href={sourceUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 7, fontSize: 11, color: 'var(--accent)' }}>온채널 원문 열기 ↗</a>}
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        style={{ display: 'block', marginTop: 10, padding: '5px 9px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
+      >{expanded ? '원문 접기' : '원문 전체 보기'}</button>
+      {expanded && <pre style={{ ...S.content, margin: '10px 0 0', maxHeight: 420, overflowY: 'auto', padding: 10, background: 'var(--bg3)', borderRadius: 6, whiteSpace: 'pre-wrap' }}>{message.content}</pre>}
+    </div>
+  );
+}
+
 export default function RoomPage() {
   const params = useParams();
   const yardKey = params.yard as string;
@@ -205,7 +234,12 @@ export default function RoomPage() {
                 <span style={S.authorTag}>{m.author_type === 'human' ? '사람' : 'AI 참여자'}</span>
                 <span style={S.time}>{fmtTime(m.created_at)}</span>
               </div>
-              <div style={S.content}>{m.content}</div>
+              <ProductMessage
+                message={m}
+                duplicateCount={m.metadata?.internal_code
+                  ? messages.filter((candidate) => candidate.metadata?.internal_code === m.metadata?.internal_code).length
+                  : 1}
+              />
               {m.ref_ids.length > 0 && (
                 <div style={S.refRow}>
                   <span style={S.refLabel}>↳ 딛고 있음:</span>
