@@ -4,6 +4,7 @@
 // [CoreNull UI 정리 2026-09-06] 기존 마당·방 View 라우트도 유지한다. 마당은 자동 병합이 아니라 명시적 URL 방문 범위다.
 
 import { supabaseGet, supabasePatch } from '@/lib/supabase';
+import { selectRandomCandidate, type ProductCandidateMessage } from '@/lib/productValidation';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
@@ -24,6 +25,21 @@ async function getYardByKey(key: string) {
 
 async function getRoomsByYardId(yardId: string) {
   return supabaseGet(`hajun_rooms?yard_id=eq.${yardId}&order=created_at.asc`);
+}
+
+// [상품검증 MVP 2026-09-09]
+// 상품 원문은 hajun_messages에만 두고 metadata.entity_type으로 후보를 식별한다.
+// metadata 컬럼이 없는 기존 DB에서도 전체 메시지 조회가 실패하지 않도록 후단에서 필터링한다.
+async function getProductCandidateMessages(roomId?: string): Promise<ProductCandidateMessage[]> {
+  const roomFilter = roomId ? `&room_id=eq.${encodeURIComponent(roomId)}` : '';
+  const rows = await supabaseGet(`hajun_messages?order=created_at.asc&limit=500${roomFilter}`);
+  return (rows || []).filter((row: Record<string, unknown>) => {
+    const metadata = row.metadata as Record<string, unknown> | null | undefined;
+    return metadata?.entity_type === 'product_candidate'
+      && typeof metadata.internal_code === 'string'
+      && typeof metadata.source === 'string'
+      && typeof metadata.source_product_code === 'string';
+  }) as ProductCandidateMessage[];
 }
 
 async function insertHajunMessage(body: Record<string, unknown>) {
@@ -313,6 +329,39 @@ export async function GET(req: Request) {
           : { ...room, messages };
       }));
       return Response.json({ payload: { yard, rooms: withMessages }, traceId: createTraceId() });
+    }
+
+    // [상품검증 MVP 2026-09-09] 원문 복제 없이 후보를 조회한다.
+    if (action === 'product_candidates') {
+      const roomId = searchParams.get('room_id') || undefined;
+      const candidates = await getProductCandidateMessages(roomId);
+      const unique = candidates.filter((message, index, all) =>
+        all.findIndex((item) => item.metadata.internal_code.toLowerCase() === message.metadata.internal_code.toLowerCase()) === index
+      );
+      return Response.json({
+        payload: { candidates: unique, count: unique.length, source: 'hajun_messages' },
+        traceId: createTraceId(),
+      });
+    }
+
+    if (action === 'product_random') {
+      const candidates = await getProductCandidateMessages(searchParams.get('room_id') || undefined);
+      const selected = selectRandomCandidate(candidates);
+      return Response.json({
+        payload: { selected, source: 'hajun_messages', ref_message_id: selected?.id || null },
+        traceId: createTraceId(),
+      });
+    }
+
+    if (action === 'product_timeline') {
+      const internalCode = searchParams.get('internal_code')?.trim().toLowerCase();
+      if (!internalCode) return Response.json({ _error: 'internal_code 파라미터 필요' }, { status: 200 });
+      const messages = await getProductCandidateMessages(searchParams.get('room_id') || undefined);
+      const timeline = messages.filter((message) => message.metadata.internal_code.toLowerCase() === internalCode);
+      return Response.json({
+        payload: { internal_code: internalCode, messages: timeline, source: 'hajun_messages' },
+        traceId: createTraceId(),
+      });
     }
 
     if (action === 'contexts') {

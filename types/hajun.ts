@@ -37,6 +37,8 @@ export type HajunMessage = {
   msg_type: MsgType;
   content: string;
   ref_ids: string[];
+  // 상품검증 등 도메인별 구조화 정보. 기존 메시지는 null/undefined일 수 있다.
+  metadata?: Record<string, unknown> | null;
   created_at: string;
 };
 

@@ -134,3 +134,13 @@ AI 분석은 판매 승인과 다르다. 사람의 확정 전에는 CoreHub 운�
 - 검증: `npm run test:product-validation` 5개 통과, `git diff --check` 통과
 - 다음 작업: 실제 `hajun_messages` 컬럼과 상품검증마당·방 key를 DB에서 확인한 뒤 API 연결
 - 주의: 현재 모듈은 순수 로직만 제공하며 DB 저장·상품검증마당 시드는 아직 추가하지 않음
+
+### 작업 로그: 2026-09-09 09:35
+- 담당: Manus 2
+- 작업: `hajun_messages` 기반 상품 후보 조회·타임라인·랜덤 선택 API 추가
+- 변경 파일: `app/api/hajun/route.ts`, `types/hajun.ts`
+- 결정: `metadata.entity_type=product_candidate`인 메시지만 후보로 읽고, 소스 원문은 `hajun_messages`에 남김; API는 조회 전용이며 상품 복제·자동 저장을 하지 않음
+- API: `GET /api/hajun?action=product_candidates`, `product_random`, `product_timeline`
+- 검증: `npm run build` 통과, `npm run test:product-validation` 5개 통과, `git diff --check` 통과
+- 다음 작업: 실제 DB의 metadata 컬럼 유무와 상품검증마당·방 key를 확인하고 캡처 저장 계약을 연결
+- 주의: 현재 DB에 `metadata` 컬럼이 없으면 후보 목록은 빈 목록을 반환하며 기존 메시지 조회는 유지됨
