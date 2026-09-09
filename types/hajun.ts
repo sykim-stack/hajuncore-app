@@ -37,6 +37,7 @@ export type HajunMessage = {
   msg_type: MsgType;
   content: string;
   ref_ids: string[];
+  metadata?: Record<string, unknown> | null;
   created_at: string;
 };
 

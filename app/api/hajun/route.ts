@@ -26,6 +26,36 @@ async function getRoomsByYardId(yardId: string) {
   return supabaseGet(`hajun_rooms?yard_id=eq.${yardId}&order=created_at.asc`);
 }
 
+async function getRoomByKeys(yardKey: string, roomKey: string) {
+  const yard = await getYardByKey(yardKey);
+  if (!yard) return { _error: `마당을 찾을 수 없습니다: ${yardKey}` };
+  const rooms = await getRoomsByYardId(yard.id);
+  const room = (rooms || []).find((item: { key?: string }) => item.key === roomKey);
+  if (!room) return { _error: `방을 찾을 수 없습니다: ${yardKey}/${roomKey}` };
+  return { yard, room };
+}
+
+function isProductMetadata(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+async function getProductMessages(internalCode?: string) {
+  let path = 'hajun_messages?metadata->>entity_type=eq.product_candidate&order=created_at.desc';
+  if (internalCode) path += `&metadata->>internal_code=eq.${encodeURIComponent(internalCode)}`;
+  return supabaseGet(path);
+}
+
+function groupProductCandidates(messages: Array<Record<string, unknown>>) {
+  const grouped = new Map<string, Record<string, unknown>>();
+  for (const message of messages) {
+    const metadata = isProductMetadata(message.metadata) ? message.metadata : {};
+    const code = typeof metadata.internal_code === 'string' ? metadata.internal_code : '';
+    if (!code || grouped.has(code)) continue;
+    grouped.set(code, { ...message, metadata });
+  }
+  return Array.from(grouped.values());
+}
+
 async function insertHajunMessage(body: Record<string, unknown>) {
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/hajun_messages`, {
@@ -253,6 +283,29 @@ export async function GET(req: Request) {
       return Response.json({ payload, traceId: createTraceId() });
     }
 
+    if (action === 'product_candidates') {
+      const messages = await getProductMessages();
+      if (messages?._error) return Response.json({ _error: messages._error, traceId: createTraceId() }, { status: 200 });
+      const candidates = groupProductCandidates((messages || []) as Array<Record<string, unknown>>);
+      return Response.json({ payload: { candidates, count: candidates.length, source: 'hajun_messages' }, traceId: createTraceId() });
+    }
+
+    if (action === 'product_random') {
+      const messages = await getProductMessages();
+      if (messages?._error) return Response.json({ _error: messages._error, traceId: createTraceId() }, { status: 200 });
+      const candidates = groupProductCandidates((messages || []) as Array<Record<string, unknown>>);
+      const selected = candidates.length ? candidates[Math.floor(Math.random() * candidates.length)] : null;
+      return Response.json({ payload: { selected, source: 'hajun_messages', ref_message_id: selected?.id || null }, traceId: createTraceId() });
+    }
+
+    if (action === 'product_timeline') {
+      const internalCode = searchParams.get('internal_code');
+      if (!internalCode) return Response.json({ _error: 'internal_code 필요', traceId: createTraceId() }, { status: 200 });
+      const messages = await getProductMessages(internalCode);
+      if (messages?._error) return Response.json({ _error: messages._error, traceId: createTraceId() }, { status: 200 });
+      return Response.json({ payload: { internal_code: internalCode, messages: messages || [], source: 'hajun_messages' }, traceId: createTraceId() });
+    }
+
     if (action === 'room_list') {
       const yardKey = searchParams.get('yard');
       if (!yardKey) return Response.json({ _error: 'yard 파라미터 필요' }, { status: 200 });
@@ -392,17 +445,26 @@ export async function POST(req: Request) {
 
     // [CoreNull UI 정리 2026-09-06] 명시적으로 방을 방문한 사용자의 메시지만 저장한다.
     if (action === 'post_message') {
-      const { room_id, author_type, author_name, msg_type, content, ref_ids = [] } = body as {
-        room_id?: string; author_type?: string; author_name?: string;
-        msg_type?: string; content?: string; ref_ids?: string[];
+      let { room_id, author_type, author_name, msg_type, content, ref_ids = [], metadata, yard_key, room_key } = body as {
+        room_id?: string; yard_key?: string; room_key?: string; author_type?: string; author_name?: string;
+        msg_type?: string; content?: string; ref_ids?: string[]; metadata?: Record<string, unknown>;
       };
+      if (!room_id && yard_key && room_key) {
+        const resolved = await getRoomByKeys(yard_key, room_key);
+        if ('_error' in resolved) return Response.json({ _error: resolved._error, traceId }, { status: 200 });
+        room_id = resolved.room.id;
+      }
       const validAuthors = ['human', 'ai'];
       const validTypes = ['doc_injection', 'understanding', 'question', 'answer', 'decision', 'issue', 'work_result'];
       if (!room_id || !author_type || !validAuthors.includes(author_type) || !author_name || !msg_type || !validTypes.includes(msg_type) || !content?.trim()) {
         return Response.json({ _error: 'room_id, author_type, author_name, msg_type, content가 필요합니다', traceId }, { status: 200 });
       }
       if (!Array.isArray(ref_ids)) return Response.json({ _error: 'ref_ids는 배열이어야 합니다', traceId }, { status: 200 });
-      const saved = await insertHajunMessage({ room_id, author_type, author_name, msg_type, content: content.trim(), ref_ids });
+      const safeMetadata = isProductMetadata(metadata) ? metadata : undefined;
+      const saved = await insertHajunMessage({
+        room_id, author_type, author_name, msg_type, content: content.trim(), ref_ids,
+        ...(safeMetadata ? { metadata: safeMetadata } : {}),
+      });
       if (saved._error) return Response.json({ _error: saved._error, traceId }, { status: 200 });
       return Response.json({ payload: saved.data?.[0] || null, traceId }, { status: 200 });
     }
