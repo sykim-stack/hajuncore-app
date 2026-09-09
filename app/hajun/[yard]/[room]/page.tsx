@@ -201,6 +201,10 @@ export default function RoomPage() {
   };
 
   const findMsg = (id: string) => messages.find((m) => m.id === id);
+  const visibleMessages = messages.filter((message, index, all) => {
+    const code = message.metadata?.internal_code;
+    return !code || all.findIndex((candidate) => candidate.metadata?.internal_code === code) === index;
+  });
 
   return (
     <div style={S.page}>
@@ -222,7 +226,7 @@ export default function RoomPage() {
           {!loading && messages.length === 0 && (
             <div style={S.empty}>아직 이 방에 메시지가 없습니다. 아래에서 첫 메시지를 남겨보세요.</div>
           )}
-          {messages.map((m) => (
+          {visibleMessages.map((m) => (
             <div
               key={m.id}
               id={`msg-${m.id}`}
