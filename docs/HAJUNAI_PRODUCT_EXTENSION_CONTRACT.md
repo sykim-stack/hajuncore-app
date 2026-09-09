@@ -4,6 +4,8 @@
 
 BRAINPOOL Core Final Chrome Extension이 로그인된 온채널·네이버 페이지에서 상품·시장조사 원문을 캡처하여 HajunCore의 상품검증 공간에 저장하기 위한 계약이다.
 
+운영 단일 DB는 Supabase 프로젝트 **Jena-Voca-01** (`grlfocvlfatuvphkyivd`)이다. `hajunai` 프로젝트나 다른 Supabase 프로젝트를 HajunCore 운영 DB로 사용하지 않는다.
+
 ## 원본과 저장 경계
 
 - 상품 원문과 검증 이력의 공식 원본은 `hajun_messages`다.
