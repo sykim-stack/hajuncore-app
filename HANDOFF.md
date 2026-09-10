@@ -162,3 +162,12 @@ AI 분석은 판매 승인과 다르다. 사람의 확정 전에는 CoreHub 운�
 - 검증: 배포 API에서 기존 메시지에 metadata가 아직 노출되지 않음을 확인; 마이그레이션은 아직 외부 DB에 적용하지 않음
 - 다음 작업: Supabase에 migration 적용 후 `POST_HAJUN_PRODUCT_CAPTURE`를 실제 상품검증 방 선택 UI와 연결
 - 주의: migration 적용 전에는 상품 캡처 action을 호출하지 않음; 현재 배포에는 metadata 저장 계약이 아직 활성화되지 않음
+
+### 작업 로그: 2026-09-10 15:01
+- 담당: Manus 2
+- 작업: 운영 배포와 코어 파이널 최신 `master`를 교차 검증하고 양쪽 상태를 정렬
+- 결과: 운영 API에서 `product_validation` 마당과 4개 기능방 확인; `product_candidates` 5건과 `product_random` 응답 확인
+- 코어 파이널: 원격 `master=0f717b5`에서 온채널 수동 캡처·중복 방지·message ID 표시 구현 확인
+- 검증: 운영 `room_list`, `product_candidates`, `product_random` 호출; 코어 파이널 JS 문법 4개 통과
+- 다음 작업: 실제 Chrome 온채널 상세페이지 캡처를 실행해 저장·중복 결과를 확인
+- 주의: 네이버 조사 extractor와 승인상품 승격은 아직 미구현이며, 운영 캡처는 수동 테스트 범위로 제한
