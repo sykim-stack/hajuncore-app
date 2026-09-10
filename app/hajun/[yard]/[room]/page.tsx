@@ -23,7 +23,9 @@ const S: Record<string, React.CSSProperties> = {
   author:    { fontSize: 12, fontWeight: 600, color: 'var(--text)' },
   authorTag: { fontSize: 10, color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace' },
   time:      { fontSize: 10, color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace', marginLeft: 'auto' },
+  collapseBtn: { fontSize: 10, padding: '3px 7px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--bg3)', color: 'var(--text3)', cursor: 'pointer' },
   content:   { fontSize: 13, color: 'var(--text)', lineHeight: 1.65, whiteSpace: 'pre-wrap', wordBreak: 'break-word' as const },
+  contentCollapsed: { maxHeight: 96, overflow: 'hidden', position: 'relative' as const, opacity: 0.78 },
   refRow:    { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' },
   refLabel:  { fontSize: 10, color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace' },
   refChip:   { fontSize: 11, padding: '3px 8px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text2)', cursor: 'pointer', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
@@ -70,6 +72,8 @@ export default function RoomPage() {
   const [msgType, setMsgType]   = useState<MsgType>('question');
   const [authorName, setAuthorName] = useState('여리');
   const [selectedRefs, setSelectedRefs] = useState<Set<string>>(new Set());
+  // [UI 복원 2026-09-10] 긴 저장 원문을 기본 접고, 사용자가 필요할 때 펼친다.
+  const [collapsedMessages, setCollapsedMessages] = useState<Set<string>>(new Set());
 
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -86,7 +90,9 @@ export default function RoomPage() {
 
     const viewRes = await fetch(`/api/hajun?action=view_room&room_id=${found.id}`);
     const viewJson = await viewRes.json();
-    setMessages(viewJson.payload?.messages || []);
+    const loadedMessages: HajunMessage[] = viewJson.payload?.messages || [];
+    setMessages(loadedMessages);
+    setCollapsedMessages(new Set(loadedMessages.filter((message) => message.content.length > 1200).map((message) => message.id)));
     setLoading(false);
     // 방에 들어오면 처음부터가 아니라 가장 최신 메시지부터 보이게
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'auto' }), 50);
@@ -173,6 +179,14 @@ export default function RoomPage() {
 
   const findMsg = (id: string) => messages.find((m) => m.id === id);
 
+  const toggleMessageCollapsed = (id: string) => {
+    setCollapsedMessages((previous) => {
+      const next = new Set(previous);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
   return (
     <div style={S.page}>
       <Sidebar />
@@ -204,8 +218,18 @@ export default function RoomPage() {
                 <span style={S.author}>{m.author_name}</span>
                 <span style={S.authorTag}>{m.author_type === 'human' ? '사람' : 'AI 참여자'}</span>
                 <span style={S.time}>{fmtTime(m.created_at)}</span>
+                <button
+                  type="button"
+                  onClick={() => toggleMessageCollapsed(m.id)}
+                  style={S.collapseBtn}
+                  aria-expanded={!collapsedMessages.has(m.id)}
+                >
+                  {collapsedMessages.has(m.id) ? '펼치기' : '접기'}
+                </button>
               </div>
-              <div style={S.content}>{m.content}</div>
+              <div style={{ ...S.content, ...(collapsedMessages.has(m.id) ? S.contentCollapsed : {}) }}>
+                {m.content}
+              </div>
               {m.ref_ids.length > 0 && (
                 <div style={S.refRow}>
                   <span style={S.refLabel}>↳ 딛고 있음:</span>
