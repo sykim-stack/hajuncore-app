@@ -13,8 +13,10 @@ const S: Record<string, React.CSSProperties> = {
   page:  { display: 'flex', minHeight: '100vh', background: 'var(--bg)' },
   main:  { flex: 1, display: 'flex', flexDirection: 'column', maxHeight: '100vh', overflow: 'hidden', minWidth: 0 },
   header:{ padding: '16px 28px 14px', borderBottom: '1px solid var(--border)', background: 'var(--bg2)', flexShrink: 0 },
+  headerRow: { display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16 },
   crumb: { fontSize: 12, color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace', marginBottom: 6 },
   title: { fontSize: 20, fontWeight: 700 },
+  copyBtn: { flexShrink: 0, fontSize: 11, padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer' },
 
   body:      { flex: 1, overflowY: 'auto', padding: '20px 24px', maxWidth: 760, scrollbarWidth: 'thin' as const, scrollbarColor: 'var(--border) transparent' },
   msgCard:   { marginBottom: 16, padding: 14, background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', transition: 'background 0.6s ease' },
@@ -70,6 +72,7 @@ export default function RoomPage() {
   const [posting, setPosting]   = useState(false);
   const [aiResponding, setAiResponding] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState('');
   const [errMsg, setErrMsg]     = useState('');
 
   const [content, setContent]   = useState('');
@@ -201,6 +204,41 @@ export default function RoomPage() {
     }
   };
 
+  const copyRoom = async () => {
+    if (!room || messages.length === 0) {
+      setCopyStatus('복사할 메시지가 없습니다');
+      return;
+    }
+    const text = [
+      `# ${room.name}`,
+      `마당: ${YARD_LABEL[yardKey] || yardKey}`,
+      `메시지 ${messages.length}건`,
+      '',
+      ...messages.map((message, index) => [
+        `## ${index + 1}. ${message.author_name} · ${message.msg_type} · ${message.created_at}`,
+        message.content,
+        message.ref_ids.length ? `참조 메시지: ${message.ref_ids.join(', ')}` : '',
+        '',
+      ].filter(Boolean).join('\n')),
+    ].join('\n');
+
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyStatus(`${messages.length}건 복사됨`);
+    } catch {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand('copy');
+      textarea.remove();
+      setCopyStatus(copied ? `${messages.length}건 복사됨` : '복사에 실패했습니다');
+    }
+    window.setTimeout(() => setCopyStatus(''), 2200);
+  };
+
   const findMsg = (id: string) => messages.find((m) => m.id === id);
 
   const toggleMessageCollapsed = (id: string) => {
@@ -223,7 +261,18 @@ export default function RoomPage() {
             <Link href={`/hajun/${yardKey}`} style={{ color: 'var(--text3)' }}>{YARD_LABEL[yardKey] || yardKey}</Link>
             {' > 방'}
           </div>
-          <div style={S.title}>{room?.name || '방'}</div>
+          <div style={S.headerRow}>
+            <div style={S.title}>{room?.name || '방'}</div>
+            <button
+              type="button"
+              style={S.copyBtn}
+              onClick={copyRoom}
+              disabled={loading}
+              title="이 방의 전체 메시지를 텍스트로 클립보드에 복사합니다"
+            >
+              {copyStatus || '방 전체 복사'}
+            </button>
+          </div>
         </div>
 
         <div style={S.body} className="msg-body">

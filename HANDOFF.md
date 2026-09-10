@@ -189,3 +189,12 @@ AI 분석은 판매 승인과 다르다. 사람의 확정 전에는 CoreHub 운�
 - 검증: `npm run test:product-validation` 6개 통과, `npm run build` 통과, `git diff --check` 통과
 - 다음 작업: 코어 파이널 확장 프로그램을 Chrome에서 새로고침한 뒤 네이버 검색·상품 페이지 수동 캡처와 운영 방 저장 결과를 실제 확인
 - 주의: 네이버 검색어 기반 식별자는 조사 이력용이며 온채널 상품과의 동일상품을 자동 확정하지 않는다. Chrome 실사용 테스트와 운영 배포는 아직 남아 있다.
+
+### 작업 로그: 2026-09-11 00:34
+- 담당: Manus
+- 작업: 방 전체 메시지를 Markdown 텍스트로 클립보드에 복사하는 UI 추가
+- 변경 파일: `app/hajun/[yard]/[room]/page.tsx`
+- 결정: 현재 방의 전체 메시지를 작성자·유형·시각·원문·참조 ID와 함께 한 번에 복사하며, Clipboard API 실패 시 브라우저 fallback을 사용한다.
+- 검증: `npm run test:product-validation`, `npm run build`, `git diff --check` 실행 예정
+- 다음 작업: 배포 후 상품발굴방에서 `방 전체 복사` 버튼과 클립보드 결과 확인
+- 주의: 브라우저 클립보드 권한이 차단된 환경에서는 복사가 실패할 수 있으며 상태 문구로 알린다.
