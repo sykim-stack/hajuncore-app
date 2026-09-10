@@ -2,6 +2,7 @@
 // 원본 저장은 hajun_messages가 담당하며, 이 모듈은 복제 없이 후보를 판정하는 순수 함수만 제공한다.
 
 export type ProductSource = 'onchannel' | 'naver' | string;
+export type ReviewStatus = 'adopted' | 'confirmed';
 
 export type ProductCandidateMetadata = {
   entity_type: 'product_candidate';
@@ -43,6 +44,9 @@ export function normalizeProductMetadata(
   const internalCode = buildInternalCode(source, sourceProductCode);
   if (!internalCode) return null;
 
+  const suppliedInternalCode = String(input.internal_code || '').trim();
+  if (suppliedInternalCode && suppliedInternalCode.toLowerCase() !== internalCode.toLowerCase()) return null;
+
   return {
     ...input,
     entity_type: 'product_candidate',
@@ -50,6 +54,22 @@ export function normalizeProductMetadata(
     source,
     source_product_code: sourceProductCode,
   };
+}
+
+/** 메시지 metadata에 검토 상태를 추가하되 원본 객체는 수정하지 않는다. */
+export function withReviewStatus(
+  metadata: Record<string, unknown> | null | undefined,
+  status: ReviewStatus,
+): Record<string, unknown> {
+  return { ...(metadata || {}), review_status: status };
+}
+
+/** 상품 후보의 상태가 검토 대기인지 판정한다. 이전 캡처는 상태가 없어도 대기 대상으로 본다. */
+export function isReviewPendingMetadata(
+  metadata: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!metadata || metadata.entity_type !== 'product_candidate') return false;
+  return metadata.review_status !== 'confirmed';
 }
 
 /** 후보 메시지를 internal_code별로 1건만 남긴다. 먼저 들어온 원문을 대표로 유지한다. */

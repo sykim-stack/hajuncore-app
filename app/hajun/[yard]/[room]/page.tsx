@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import Sidebar from '@/components/Sidebar';
+import { isReviewPendingMetadata } from '@/lib/productValidation';
 import {
   HajunYard, HajunRoom, HajunMessage,
   MSG_TYPE_LABEL, MSG_TYPE_COLOR, MSG_TYPE_ORDER, MsgType, YARD_LABEL,
@@ -24,6 +25,8 @@ const S: Record<string, React.CSSProperties> = {
   authorTag: { fontSize: 10, color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace' },
   time:      { fontSize: 10, color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace', marginLeft: 'auto' },
   collapseBtn: { fontSize: 10, padding: '3px 7px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--bg3)', color: 'var(--text3)', cursor: 'pointer' },
+  statusChip: { fontSize: 10, padding: '2px 7px', borderRadius: 4, fontFamily: 'JetBrains Mono, monospace', fontWeight: 700 },
+  confirmBtn: { fontSize: 10, padding: '3px 8px', border: '1px solid rgba(63,185,80,0.6)', borderRadius: 5, background: 'rgba(63,185,80,0.12)', color: '#3FB950', cursor: 'pointer' },
   content:   { fontSize: 13, color: 'var(--text)', lineHeight: 1.65, whiteSpace: 'pre-wrap', wordBreak: 'break-word' as const },
   contentCollapsed: { maxHeight: 96, overflow: 'hidden', position: 'relative' as const, opacity: 0.78 },
   refRow:    { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' },
@@ -66,6 +69,7 @@ export default function RoomPage() {
   const [loading, setLoading]   = useState(true);
   const [posting, setPosting]   = useState(false);
   const [aiResponding, setAiResponding] = useState(false);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [errMsg, setErrMsg]     = useState('');
 
   const [content, setContent]   = useState('');
@@ -177,6 +181,26 @@ export default function RoomPage() {
     }
   };
 
+  const confirmProduct = async (messageId: string) => {
+    if (confirmingId) return;
+    setConfirmingId(messageId);
+    setErrMsg('');
+    try {
+      const res = await fetch('/api/hajun?action=confirm_product', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: messageId, author_name: authorName || '사람 확인' }),
+      });
+      const json = await res.json();
+      if (json._error) setErrMsg(json._error);
+      else await load();
+    } catch (error) {
+      setErrMsg(error instanceof Error ? error.message : '상품 확인에 실패했습니다');
+    } finally {
+      setConfirmingId(null);
+    }
+  };
+
   const findMsg = (id: string) => messages.find((m) => m.id === id);
 
   const toggleMessageCollapsed = (id: string) => {
@@ -207,7 +231,13 @@ export default function RoomPage() {
           {!loading && messages.length === 0 && (
             <div style={S.empty}>아직 이 방에 메시지가 없습니다. 아래에서 첫 메시지를 남겨보세요.</div>
           )}
-          {messages.map((m) => (
+          {messages.map((m) => {
+            const metadata = m.metadata;
+            const isProductCandidate = metadata?.entity_type === 'product_candidate';
+            const isProductDecision = metadata?.entity_type === 'product_decision';
+            const pendingReview = isProductCandidate && isReviewPendingMetadata(metadata);
+            const isLongMessage = m.content.length > 1200;
+            return (
             <div
               key={m.id}
               id={`msg-${m.id}`}
@@ -217,19 +247,41 @@ export default function RoomPage() {
                 {chip(m.msg_type)}
                 <span style={S.author}>{m.author_name}</span>
                 <span style={S.authorTag}>{m.author_type === 'human' ? '사람' : 'AI 참여자'}</span>
+                {isProductCandidate && (
+                  <span style={{ ...S.statusChip, background: pendingReview ? 'rgba(240,136,62,0.14)' : 'rgba(63,185,80,0.14)', color: pendingReview ? '#F0883E' : '#3FB950' }}>
+                    {pendingReview ? '검토 대기' : '확인됨'}
+                  </span>
+                )}
+                {isProductDecision && (
+                  <span style={{ ...S.statusChip, background: 'rgba(63,185,80,0.14)', color: '#3FB950' }}>사람 확인</span>
+                )}
                 <span style={S.time}>{fmtTime(m.created_at)}</span>
-                <button
-                  type="button"
-                  onClick={() => toggleMessageCollapsed(m.id)}
-                  style={S.collapseBtn}
-                  aria-expanded={!collapsedMessages.has(m.id)}
-                >
-                  {collapsedMessages.has(m.id) ? '펼치기' : '접기'}
-                </button>
+                {isLongMessage && (
+                  <button
+                    type="button"
+                    onClick={() => toggleMessageCollapsed(m.id)}
+                    style={S.collapseBtn}
+                    aria-expanded={!collapsedMessages.has(m.id)}
+                  >
+                    {collapsedMessages.has(m.id) ? '펼치기' : '접기'}
+                  </button>
+                )}
               </div>
               <div style={{ ...S.content, ...(collapsedMessages.has(m.id) ? S.contentCollapsed : {}) }}>
                 {m.content}
               </div>
+              {pendingReview && (
+                <div style={{ marginTop: 10 }}>
+                  <button
+                    type="button"
+                    style={S.confirmBtn}
+                    onClick={() => confirmProduct(m.id)}
+                    disabled={confirmingId !== null}
+                  >
+                    {confirmingId === m.id ? '확인 기록 중...' : '사람이 확인함'}
+                  </button>
+                </div>
+              )}
               {m.ref_ids.length > 0 && (
                 <div style={S.refRow}>
                   <span style={S.refLabel}>↳ 딛고 있음:</span>
@@ -249,7 +301,8 @@ export default function RoomPage() {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
           <div ref={bottomRef} />
         </div>
 

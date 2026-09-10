@@ -4,7 +4,15 @@
 // [CoreNull UI 정리 2026-09-06] 기존 마당·방 View 라우트도 유지한다. 마당은 자동 병합이 아니라 명시적 URL 방문 범위다.
 
 import { supabaseGet, supabasePatch } from '@/lib/supabase';
-import { selectRandomCandidate, type ProductCandidateMessage } from '@/lib/productValidation';
+import {
+  buildInternalCode,
+  isReviewPendingMetadata,
+  normalizeProductMetadata,
+  selectRandomCandidate,
+  withReviewStatus,
+  type ProductCandidateMessage,
+  type ProductCandidateMetadata,
+} from '@/lib/productValidation';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
@@ -356,8 +364,19 @@ export async function GET(req: Request) {
     if (action === 'product_timeline') {
       const internalCode = searchParams.get('internal_code')?.trim().toLowerCase();
       if (!internalCode) return Response.json({ _error: 'internal_code 파라미터 필요' }, { status: 200 });
-      const messages = await getProductCandidateMessages(searchParams.get('room_id') || undefined);
-      const timeline = messages.filter((message) => message.metadata.internal_code.toLowerCase() === internalCode);
+      const timelineRoomId = searchParams.get('room_id');
+      const roomFilter = timelineRoomId
+        ? `&room_id=eq.${encodeURIComponent(timelineRoomId)}`
+        : '';
+      const allMessages = await supabaseGet(`hajun_messages?order=created_at.asc&limit=500${roomFilter}`);
+      const timeline = (allMessages || []).filter((message: Record<string, unknown>) => {
+        const metadata = message.metadata as Record<string, unknown> | null | undefined;
+        return typeof metadata?.internal_code === 'string'
+          && metadata.internal_code.toLowerCase() === internalCode
+          && (metadata.entity_type === 'product_candidate'
+            || metadata.entity_type === 'market_research'
+            || metadata.entity_type === 'product_decision');
+      });
       return Response.json({
         payload: { internal_code: internalCode, messages: timeline, source: 'hajun_messages' },
         traceId: createTraceId(),
@@ -506,10 +525,82 @@ export async function POST(req: Request) {
         return Response.json({ _error: 'metadata는 JSON 객체여야 합니다', traceId }, { status: 200 });
       }
       const messagePayload: Record<string, unknown> = { room_id, author_type, author_name, msg_type, content: content.trim(), ref_ids };
-      if (metadata !== undefined) messagePayload.metadata = metadata;
+      if (metadata !== undefined) {
+        if (metadata.entity_type === 'product_candidate') {
+          const normalized = normalizeProductMetadata(metadata as Partial<ProductCandidateMetadata>);
+          if (!normalized) {
+            return Response.json({ _error: '상품 후보 metadata의 source, source_product_code, internal_code가 일치해야 합니다', traceId }, { status: 200 });
+          }
+          messagePayload.metadata = withReviewStatus(normalized, 'adopted');
+        } else if (metadata.entity_type === 'market_research') {
+          const source = String(metadata.source || '').trim().toLowerCase();
+          const sourceProductCode = String(metadata.source_product_code || '').trim();
+          const expectedCode = buildInternalCode(source, sourceProductCode);
+          if (source !== 'naver' || !expectedCode || String(metadata.internal_code || '').trim().toLowerCase() !== expectedCode.toLowerCase()) {
+            return Response.json({ _error: '시장조사 metadata의 source, source_product_code, internal_code가 네이버 식별자와 일치해야 합니다', traceId }, { status: 200 });
+          }
+          messagePayload.metadata = { ...metadata, source, source_product_code: sourceProductCode, internal_code: expectedCode };
+        } else {
+          messagePayload.metadata = metadata;
+        }
+      }
       const saved = await insertHajunMessage(messagePayload);
       if (saved._error) return Response.json({ _error: saved._error, traceId }, { status: 200 });
       return Response.json({ payload: saved.data?.[0] || null, traceId }, { status: 200 });
+    }
+
+    if (action === 'confirm_product') {
+      const messageId = body.message_id || body.messageId;
+      const authorName = body.author_name || body.authorName || '사람 확인';
+      const decisionContent = typeof body.content === 'string' && body.content.trim()
+        ? body.content.trim()
+        : '상품 후보를 사람 확인함';
+      if (!messageId || typeof messageId !== 'string') {
+        return Response.json({ _error: 'message_id 필요', traceId }, { status: 200 });
+      }
+
+      const originals = await supabaseGet(
+        `hajun_messages?id=eq.${encodeURIComponent(messageId)}&limit=1`,
+      );
+      const original = originals?.[0] as Record<string, unknown> | undefined;
+      const originalMetadata = original?.metadata as Record<string, unknown> | null | undefined;
+      if (!original || originalMetadata?.entity_type !== 'product_candidate') {
+        return Response.json({ _error: '상품 후보 원문을 찾을 수 없습니다', traceId }, { status: 200 });
+      }
+      const roomMessages = await supabaseGet(
+        `hajun_messages?room_id=eq.${encodeURIComponent(String(original.room_id))}&order=created_at.asc&limit=500`,
+      );
+      const alreadyConfirmed = (roomMessages || []).some((message: Record<string, unknown>) => {
+        const metadata = message.metadata as Record<string, unknown> | null | undefined;
+        const refs = message.ref_ids as unknown;
+        return metadata?.entity_type === 'product_decision'
+          && metadata.decision === 'confirmed'
+          && Array.isArray(refs)
+          && refs.includes(messageId);
+      });
+      if (alreadyConfirmed || !isReviewPendingMetadata(originalMetadata)) {
+        return Response.json({ payload: { message: original, already_confirmed: true }, traceId }, { status: 200 });
+      }
+
+      const decision = await insertHajunMessage({
+        room_id: original.room_id,
+        author_type: 'human',
+        author_name: authorName,
+        msg_type: 'decision',
+        content: decisionContent,
+        ref_ids: [messageId],
+        metadata: {
+          entity_type: 'product_decision',
+          decision: 'confirmed',
+          internal_code: originalMetadata.internal_code,
+          source: originalMetadata.source,
+          source_product_code: originalMetadata.source_product_code,
+          review_status: 'confirmed',
+          confirmed_message_id: messageId,
+        },
+      });
+      if (decision._error) return Response.json({ _error: decision._error, traceId }, { status: 200 });
+      return Response.json({ payload: { message: decision.data?.[0] || null, confirmed_message_id: messageId }, traceId }, { status: 200 });
     }
 
     if (action === 'ai_respond') {
@@ -536,7 +627,15 @@ export async function POST(req: Request) {
       const aiJson = await aiRes.json();
       const text = aiJson.choices?.[0]?.message?.content?.trim();
       if (!text) return Response.json({ _error: 'AI 답변이 비어 있습니다', traceId }, { status: 200 });
-      const saved = await insertHajunMessage({ room_id, author_type: 'ai', author_name: 'HajunAI', msg_type: 'answer', content: text, ref_ids: Array.isArray(ref_ids) ? ref_ids : [] });
+      const saved = await insertHajunMessage({
+        room_id,
+        author_type: 'ai',
+        author_name: 'HajunAI',
+        msg_type: 'answer',
+        content: text,
+        ref_ids: Array.isArray(ref_ids) ? ref_ids : [],
+        metadata: { review_status: 'adopted' },
+      });
       if (saved._error) return Response.json({ _error: saved._error, traceId }, { status: 200 });
       return Response.json({ payload: saved.data?.[0] || null, traceId }, { status: 200 });
     }

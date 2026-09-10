@@ -1,6 +1,6 @@
 # HajunAI 상품검증 확장 연동 계약
 
-> **상태:** 1차 계약 고정 / 캡처 구현 전
+> **상태:** 1차 계약 고정 / 온채널·네이버 수동 캡처 구현
 > **갱신일:** 2026-09-09
 > **공유 저장소:** `hajuncore-app` · `brainpool-core-final`
 > **기준 브랜치:** `master`
@@ -69,7 +69,9 @@ GET  /api/hajun?action=product_timeline&internal_code={code}
 }
 ```
 
-네이버 시장조사 캡처는 같은 `internal_code`를 사용해 `market_research` 메시지로 연결한다. 동일상품 여부는 자동 확정하지 않는다.
+네이버 시장조사 캡처는 네이버 상품번호 또는 검색어를 기준으로 `naver:{source_product_code}`를 사용해 `market_research` 메시지로 저장한다. 같은 식별자의 재조사는 이력으로 저장할 수 있으며, 동일상품 여부나 판매 승인은 자동 확정하지 않는다.
+
+네이버 extractor는 현재 열린 네이버 검색·상품 페이지에서 사용자가 팝업의 캡처 버튼을 눌렀을 때만 실행한다. 검색어, 가격, 리뷰 수·평점, 해시태그·키워드, 원문 URL과 최대 20,000자의 본문을 metadata와 content에 보존한다.
 
 ## 확인 대기 규칙
 

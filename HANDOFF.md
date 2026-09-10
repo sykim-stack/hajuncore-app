@@ -180,3 +180,12 @@ AI 분석은 판매 승인과 다르다. 사람의 확정 전에는 CoreHub 운�
 - 검증: `npm run build`, `npm run test:product-validation` 5개 통과, `git diff --check` 통과
 - 다음 작업: 배포 후 상품발굴방의 긴 원문과 일반 메시지에서 접기 동작 확인
 - 주의: 접힘 상태는 현재 방을 다시 로드하면 긴 메시지 기준으로 초기화됨
+
+### 작업 로그: 2026-09-10 23:58
+- 담당: Manus
+- 작업: 네이버 시장조사 메시지 계약과 사람 확인 흐름을 구현하고 두 정식 저장소의 구현 범위를 정렬
+- 변경 파일: `app/api/hajun/route.ts`, `app/hajun/[yard]/[room]/page.tsx`, `lib/productValidation.ts`, `lib/productValidation.test.ts`, `docs/HAJUNAI_PRODUCT_EXTENSION_CONTRACT.md`
+- 결정: 네이버 시장조사는 `metadata.entity_type=market_research`와 `internal_code=naver:source_product_code`로 `hajun_messages`에 저장하며, 현재 열린 페이지에서 사용자가 수동 캡처한 경우에만 처리한다. 사람 확인은 원문을 수정하지 않고 `product_decision` 메시지를 append한다.
+- 검증: `npm run test:product-validation` 6개 통과, `npm run build` 통과, `git diff --check` 통과
+- 다음 작업: 코어 파이널 확장 프로그램을 Chrome에서 새로고침한 뒤 네이버 검색·상품 페이지 수동 캡처와 운영 방 저장 결과를 실제 확인
+- 주의: 네이버 검색어 기반 식별자는 조사 이력용이며 온채널 상품과의 동일상품을 자동 확정하지 않는다. Chrome 실사용 테스트와 운영 배포는 아직 남아 있다.

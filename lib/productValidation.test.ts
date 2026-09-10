@@ -6,6 +6,8 @@ import {
   normalizeProductMetadata,
   selectRandomCandidate,
   uniqueProductCandidates,
+  withReviewStatus,
+  isReviewPendingMetadata,
   type ProductCandidateMessage,
 } from './productValidation.ts';
 
@@ -29,6 +31,15 @@ test('source와 source_product_code로 internal_code를 만든다', () => {
 test('상품 metadata를 정규화하고 식별자 누락을 거부한다', () => {
   assert.equal(normalizeProductMetadata({ source: 'NAVER', source_product_code: 'N-7' })?.internal_code, 'naver:N-7');
   assert.equal(normalizeProductMetadata({ source: 'naver', source_product_code: '' }), null);
+  assert.equal(normalizeProductMetadata({ source: 'naver', source_product_code: 'N-7', internal_code: 'naver:other' }), null);
+});
+
+test('상품 검토 상태를 기본 검토 대기로 보존한다', () => {
+  const metadata = { entity_type: 'product_candidate', internal_code: 'onchannel:A' };
+  assert.equal(isReviewPendingMetadata(metadata), true);
+  assert.equal(isReviewPendingMetadata(withReviewStatus(metadata, 'confirmed')), false);
+  assert.equal(withReviewStatus(metadata, 'adopted').review_status, 'adopted');
+  assert.equal(metadata.review_status, undefined);
 });
 
 test('같은 internal_code는 후보 목록에서 한 번만 남긴다', () => {
