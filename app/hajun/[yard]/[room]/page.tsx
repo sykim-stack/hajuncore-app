@@ -43,6 +43,9 @@ const S: Record<string, React.CSSProperties> = {
   textarea:  { width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', padding: '10px 14px', fontSize: 13, outline: 'none', resize: 'vertical' as const, fontFamily: 'Noto Sans KR, sans-serif', lineHeight: 1.5, minHeight: 70, marginBottom: 8 },
   refPicker: { display: 'flex', gap: 6, flexWrap: 'wrap' as const, marginBottom: 10, maxHeight: 70, overflowY: 'auto' as const },
   refHint:   { fontSize: 10, color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace', marginBottom: 6 },
+  contextRow: { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' as const },
+  contextInput: { flex: '1 1 220px', minWidth: 180, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', padding: '6px 9px', fontSize: 11, outline: 'none' },
+  contextBtn: { fontSize: 11, padding: '6px 9px', border: '1px solid rgba(88,166,255,0.6)', borderRadius: 6, background: 'rgba(88,166,255,0.12)', color: 'var(--accent)', cursor: 'pointer' },
   refToggle: { fontSize: 11, padding: '4px 9px', borderRadius: 6, cursor: 'pointer', border: '1px solid var(--border)', fontFamily: 'JetBrains Mono, monospace' },
   btnRow:    { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' as const },
   submitBtn: { padding: '9px 20px', background: 'var(--accent)', color: '#0D1117', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer' },
@@ -72,6 +75,7 @@ export default function RoomPage() {
   const [posting, setPosting]   = useState(false);
   const [aiResponding, setAiResponding] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [savingContext, setSavingContext] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
   const [errMsg, setErrMsg]     = useState('');
 
@@ -79,6 +83,7 @@ export default function RoomPage() {
   const [msgType, setMsgType]   = useState<MsgType>('question');
   const [authorName, setAuthorName] = useState('여리');
   const [selectedRefs, setSelectedRefs] = useState<Set<string>>(new Set());
+  const [contextLabel, setContextLabel] = useState('');
   // [UI 복원 2026-09-10] 긴 저장 원문을 기본 접고, 사용자가 필요할 때 펼친다.
   const [collapsedMessages, setCollapsedMessages] = useState<Set<string>>(new Set());
 
@@ -239,6 +244,39 @@ export default function RoomPage() {
     window.setTimeout(() => setCopyStatus(''), 2200);
   };
 
+  const saveSelectedContext = async () => {
+    if (!room || selectedRefs.size === 0 || savingContext) return;
+    setSavingContext(true);
+    setErrMsg('');
+    const label = contextLabel.trim() || '선택 메시지 맥락';
+    try {
+      const res = await fetch('/api/hajun?action=post_message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          room_id: room.id,
+          author_type: 'human',
+          author_name: authorName || '익명',
+          msg_type: 'understanding',
+          content: `맥락 저장: ${label}\n선택한 ${selectedRefs.size}개 메시지를 하나의 맥락으로 묶었습니다. 원문은 참조 메시지로 유지합니다.`,
+          ref_ids: Array.from(selectedRefs),
+          metadata: { entity_type: 'room_context', title: label, source: 'manual' },
+        }),
+      });
+      const json = await res.json();
+      if (json._error) setErrMsg(json._error);
+      else {
+        setContextLabel('');
+        setSelectedRefs(new Set());
+        await load();
+      }
+    } catch (error) {
+      setErrMsg(error instanceof Error ? error.message : '맥락 저장에 실패했습니다');
+    } finally {
+      setSavingContext(false);
+    }
+  };
+
   const findMsg = (id: string) => messages.find((m) => m.id === id);
 
   const toggleMessageCollapsed = (id: string) => {
@@ -373,6 +411,22 @@ export default function RoomPage() {
             <>
               <div style={S.refHint}>
                 참조할 이전 메시지 선택 (사람 글 작성 시 근거로, AI 요청 시 &quot;이거 보고 답해줘&quot;로 쓰임)
+              </div>
+              <div style={S.contextRow}>
+                <input
+                  style={S.contextInput}
+                  value={contextLabel}
+                  onChange={(event) => setContextLabel(event.target.value)}
+                  placeholder="선택 메시지 맥락 이름 또는 메모 (선택)"
+                />
+                <button
+                  type="button"
+                  style={{ ...S.contextBtn, ...(savingContext || selectedRefs.size === 0 ? S.submitOff : {}) }}
+                  onClick={saveSelectedContext}
+                  disabled={savingContext || selectedRefs.size === 0}
+                >
+                  {savingContext ? '맥락 저장 중...' : `선택 맥락 저장 (${selectedRefs.size})`}
+                </button>
               </div>
               <div style={S.refPicker}>
                 {messages.map((m) => {

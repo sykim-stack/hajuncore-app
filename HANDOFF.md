@@ -198,3 +198,12 @@ AI 분석은 판매 승인과 다르다. 사람의 확정 전에는 CoreHub 운�
 - 검증: `npm run test:product-validation`, `npm run build`, `git diff --check` 실행 예정
 - 다음 작업: 배포 후 상품발굴방에서 `방 전체 복사` 버튼과 클립보드 결과 확인
 - 주의: 브라우저 클립보드 권한이 차단된 환경에서는 복사가 실패할 수 있으며 상태 문구로 알린다.
+
+### 작업 로그: 2026-09-11 00:40
+- 담당: Manus
+- 작업: 누적 메시지 중 선택한 여러 메시지를 하나의 맥락 기록으로 저장하는 UI 추가
+- 변경 파일: `app/hajun/[yard]/[room]/page.tsx`
+- 결정: 선택한 메시지를 새 원문으로 복제하지 않고 `understanding` 메시지의 `ref_ids`와 `metadata.entity_type=room_context`로 묶는다. 맥락 이름은 사용자가 입력하거나 기본값을 사용한다.
+- 검증: `npm run test:product-validation`, `npm run build`, `git diff --check` 실행 예정
+- 다음 작업: 배포 후 방에서 여러 메시지 선택 → 맥락 이름 입력 → `선택 맥락 저장` → 참조 연결 표시 확인
+- 주의: 맥락 저장은 원문을 요약·삭제하지 않으며, 원문 메시지는 계속 방에 남는다.
