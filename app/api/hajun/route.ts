@@ -490,6 +490,7 @@ export async function POST(req: Request) {
       const msg_type = body.msg_type || body.msgType || 'question';
       const content = body.content || body.message;
       const ref_ids = body.ref_ids || body.refIds || [];
+      const metadata = body.metadata;
       const validAuthors = ['human', 'ai'];
       const validTypes = ['doc_injection', 'understanding', 'question', 'answer', 'decision', 'issue', 'work_result'];
       const missing: string[] = [];
@@ -501,7 +502,12 @@ export async function POST(req: Request) {
         return Response.json({ _error: `메시지 저장 입력 오류: ${missing.join(', ')} 확인 필요`, traceId }, { status: 200 });
       }
       if (!Array.isArray(ref_ids)) return Response.json({ _error: 'ref_ids는 배열이어야 합니다', traceId }, { status: 200 });
-      const saved = await insertHajunMessage({ room_id, author_type, author_name, msg_type, content: content.trim(), ref_ids });
+      if (metadata !== undefined && (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata))) {
+        return Response.json({ _error: 'metadata는 JSON 객체여야 합니다', traceId }, { status: 200 });
+      }
+      const messagePayload: Record<string, unknown> = { room_id, author_type, author_name, msg_type, content: content.trim(), ref_ids };
+      if (metadata !== undefined) messagePayload.metadata = metadata;
+      const saved = await insertHajunMessage(messagePayload);
       if (saved._error) return Response.json({ _error: saved._error, traceId }, { status: 200 });
       return Response.json({ payload: saved.data?.[0] || null, traceId }, { status: 200 });
     }

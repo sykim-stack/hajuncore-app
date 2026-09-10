@@ -40,6 +40,8 @@ GET  /api/hajun?action=product_timeline&internal_code={code}
 
 현재 상품 후보 조회 API는 `metadata.entity_type=product_candidate`인 메시지만 읽는다. 캡처 저장 API는 아래 계약으로 연결하되, 실제 구현 전 DB의 `metadata` 컬럼 존재 여부를 확인한다.
 
+현재 저장 API와 코어 파이널의 `POST_HAJUN_PRODUCT_CAPTURE` 전달 action은 코드에 연결되었지만, Supabase migration 적용 전에는 호출하지 않는다. migration 파일은 `supabase/migrations/20260909_product_validation_metadata.sql`이다.
+
 ## 캡처 저장 payload 초안
 
 ```json

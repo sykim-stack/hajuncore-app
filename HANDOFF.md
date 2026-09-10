@@ -153,3 +153,12 @@ AI 분석은 판매 승인과 다르다. 사람의 확정 전에는 CoreHub 운�
 - 검증: 코어 파이널 로컬을 원격 `4b5d4e8`까지 fast-forward; 공통 API·payload 계약 문서화
 - 다음 작업: HajunAI DB의 `metadata` 컬럼과 상품검증마당·방 key를 확인한 뒤 양쪽 캡처 저장 API를 연결
 - 주의: 저장 계약 확정 전 온채널·네이버 추출기를 먼저 구현하지 않음
+
+### 작업 로그: 2026-09-09 10:06
+- 담당: Manus 2
+- 작업: 양쪽 저장 계약의 첫 구현으로 `hajun_messages.metadata` 저장 지원과 코어 파이널 캡처 전달 action 추가
+- 변경 파일: `app/api/hajun/route.ts`, `supabase/migrations/20260909_product_validation_metadata.sql`, 코어 파이널 `background.js`
+- 결정: metadata는 선택 필드로만 저장하며, 상품 캡처는 `entity_type=product_candidate`와 `internal_code`를 필수로 한다
+- 검증: 배포 API에서 기존 메시지에 metadata가 아직 노출되지 않음을 확인; 마이그레이션은 아직 외부 DB에 적용하지 않음
+- 다음 작업: Supabase에 migration 적용 후 `POST_HAJUN_PRODUCT_CAPTURE`를 실제 상품검증 방 선택 UI와 연결
+- 주의: migration 적용 전에는 상품 캡처 action을 호출하지 않음; 현재 배포에는 metadata 저장 계약이 아직 활성화되지 않음
