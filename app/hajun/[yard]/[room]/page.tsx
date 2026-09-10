@@ -29,6 +29,7 @@ const S: Record<string, React.CSSProperties> = {
   collapseBtn: { fontSize: 10, padding: '3px 7px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--bg3)', color: 'var(--text3)', cursor: 'pointer' },
   statusChip: { fontSize: 10, padding: '2px 7px', borderRadius: 4, fontFamily: 'JetBrains Mono, monospace', fontWeight: 700 },
   confirmBtn: { fontSize: 10, padding: '3px 8px', border: '1px solid rgba(63,185,80,0.6)', borderRadius: 5, background: 'rgba(63,185,80,0.12)', color: '#3FB950', cursor: 'pointer' },
+  messageCopyBtn: { fontSize: 10, padding: '3px 7px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--bg3)', color: 'var(--text3)', cursor: 'pointer' },
   content:   { fontSize: 13, color: 'var(--text)', lineHeight: 1.65, whiteSpace: 'pre-wrap', wordBreak: 'break-word' as const },
   contentCollapsed: { maxHeight: 96, overflow: 'hidden', position: 'relative' as const, opacity: 0.78 },
   refRow:    { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' },
@@ -77,6 +78,7 @@ export default function RoomPage() {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [savingContext, setSavingContext] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [errMsg, setErrMsg]     = useState('');
 
   const [content, setContent]   = useState('');
@@ -277,6 +279,33 @@ export default function RoomPage() {
     }
   };
 
+  const copyMessage = async (message: HajunMessage) => {
+    const text = [
+      `[${message.author_name} · ${message.msg_type} · ${message.created_at}]`,
+      message.content,
+    ].join('\n');
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+    } catch {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      copied = document.execCommand('copy');
+      textarea.remove();
+    }
+    if (copied) {
+      setCopiedMessageId(message.id);
+      window.setTimeout(() => setCopiedMessageId((current) => current === message.id ? null : current), 1800);
+    } else {
+      setErrMsg('메시지 복사에 실패했습니다');
+    }
+  };
+
   const findMsg = (id: string) => messages.find((m) => m.id === id);
 
   const toggleMessageCollapsed = (id: string) => {
@@ -357,6 +386,14 @@ export default function RoomPage() {
                     {collapsedMessages.has(m.id) ? '펼치기' : '접기'}
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => copyMessage(m)}
+                  style={S.messageCopyBtn}
+                  title="이 메시지의 전체 원문을 복사합니다"
+                >
+                  {copiedMessageId === m.id ? '복사됨' : '복사'}
+                </button>
               </div>
               <div style={{ ...S.content, ...(collapsedMessages.has(m.id) ? S.contentCollapsed : {}) }}>
                 {m.content}
