@@ -235,7 +235,11 @@ export default function RoomPage() {
             const metadata = m.metadata;
             const isProductCandidate = metadata?.entity_type === 'product_candidate';
             const isProductDecision = metadata?.entity_type === 'product_decision';
-            const pendingReview = isProductCandidate && isReviewPendingMetadata(metadata);
+            const hasConfirmation = isProductCandidate && messages.some((candidate) => (
+              candidate.metadata?.entity_type === 'product_decision'
+              && candidate.metadata.confirmed_message_id === m.id
+            ));
+            const pendingReview = isProductCandidate && !hasConfirmation && isReviewPendingMetadata(metadata);
             const isLongMessage = m.content.length > 1200;
             return (
             <div
