@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { Fragment, useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import Sidebar from '@/components/Sidebar';
@@ -17,6 +17,13 @@ const S: Record<string, React.CSSProperties> = {
   crumb: { fontSize: 12, color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace', marginBottom: 6 },
   title: { fontSize: 20, fontWeight: 700 },
   copyBtn: { flexShrink: 0, fontSize: 11, padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer' },
+  workflow: { marginTop: 12, padding: 12, background: 'rgba(88,166,255,0.07)', border: '1px solid rgba(88,166,255,0.25)', borderRadius: 8 },
+  workflowTitle: { fontSize: 11, fontWeight: 700, color: 'var(--accent)', marginBottom: 8 },
+  workflowSteps: { display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' as const },
+  workflowStep: { fontSize: 10, padding: '4px 7px', borderRadius: 5, background: 'var(--bg3)', color: 'var(--text3)' },
+  workflowActive: { background: 'rgba(88,166,255,0.2)', color: 'var(--text)', border: '1px solid rgba(88,166,255,0.45)' },
+  workflowArrow: { fontSize: 10, color: 'var(--text3)' },
+  workflowHint: { marginTop: 8, fontSize: 11, lineHeight: 1.5, color: 'var(--text2)' },
 
   body:      { flex: 1, overflowY: 'auto', padding: '20px 24px', maxWidth: 760, scrollbarWidth: 'thin' as const, scrollbarColor: 'var(--border) transparent' },
   msgCard:   { marginBottom: 16, padding: 14, background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', transition: 'background 0.6s ease' },
@@ -312,6 +319,14 @@ export default function RoomPage() {
 
   const findMsg = (id: string) => messages.find((m) => m.id === id);
 
+  const workflow = [
+    { key: 'product_discovery', label: '1. 발굴', hint: '온채널 원문을 저장하고 후보를 선택합니다.' },
+    { key: 'market_research', label: '2. 조사', hint: '네이버 시장조사 결과를 저장합니다.' },
+    { key: 'product_validation', label: '3. 검증', hint: '발굴·조사 메시지를 선택해 검증방에 기록합니다.' },
+    { key: 'approved_products', label: '4. 승인', hint: '사람 확인 후 승인상품방으로 보냅니다.' },
+  ];
+  const activeWorkflow = workflow.find((step) => step.key === roomKey) || workflow[0];
+
   const saveValidationContext = async () => {
     if (selectedRefs.size === 0 || savingValidation) return;
     setSavingValidation(true);
@@ -393,6 +408,25 @@ export default function RoomPage() {
               {copyStatus || '방 전체 복사'}
             </button>
           </div>
+          {yardKey === 'product_validation' && (
+            <div style={S.workflow}>
+              <div style={S.workflowTitle}>상품검증 진행 흐름 · 현재: {activeWorkflow.label}</div>
+              <div style={S.workflowSteps}>
+                {workflow.map((step, index) => (
+                  <Fragment key={step.key}>
+                    <Link
+                      href={`/hajun/${yardKey}/${step.key}`}
+                      style={{ ...S.workflowStep, ...(step.key === roomKey ? S.workflowActive : {}), textDecoration: 'none' }}
+                    >
+                      {step.label}
+                    </Link>
+                    {index < workflow.length - 1 && <span style={S.workflowArrow}>→</span>}
+                  </Fragment>
+                ))}
+              </div>
+              <div style={S.workflowHint}>{activeWorkflow.hint}</div>
+            </div>
+          )}
         </div>
 
         <div style={S.body} className="msg-body">
