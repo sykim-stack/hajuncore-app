@@ -603,6 +603,66 @@ export async function POST(req: Request) {
       return Response.json({ payload: { message: decision.data?.[0] || null, confirmed_message_id: messageId }, traceId }, { status: 200 });
     }
 
+    if (action === 'save_validation_context') {
+      const sourceMessageIds = Array.isArray(body.source_message_ids)
+        ? body.source_message_ids.filter((id: unknown): id is string => typeof id === 'string' && id.trim().length > 0)
+        : [];
+      const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : '상품 검증 기록';
+      const note = typeof body.content === 'string' && body.content.trim()
+        ? body.content.trim()
+        : `검증 기록: ${title}\n선택한 ${sourceMessageIds.length}개 메시지를 검증방에서 검토합니다.`;
+      const authorName = typeof body.author_name === 'string' && body.author_name.trim() ? body.author_name.trim() : '사람 검토';
+      if (sourceMessageIds.length === 0) return Response.json({ _error: 'source_message_ids가 필요합니다', traceId }, { status: 200 });
+      const sourceMessages = await supabaseGet(`hajun_messages?id=in.(${sourceMessageIds.map((id: string) => encodeURIComponent(id)).join(',')})&limit=50`);
+      if (!sourceMessages || sourceMessages.length !== sourceMessageIds.length) return Response.json({ _error: '선택한 원문 메시지를 모두 찾을 수 없습니다', traceId }, { status: 200 });
+      const validationYard = await getYardByKey('product_validation');
+      if (!validationYard) return Response.json({ _error: '상품검증마당을 찾을 수 없습니다', traceId }, { status: 200 });
+      const validationRooms = await getRoomsByYardId(validationYard.id);
+      const validationRoom = (validationRooms || []).find((room: { key?: string }) => room.key === 'product_validation');
+      if (!validationRoom) return Response.json({ _error: '검증방을 찾을 수 없습니다', traceId }, { status: 200 });
+      const saved = await insertHajunMessage({
+        room_id: validationRoom.id, author_type: 'human', author_name: authorName, msg_type: 'understanding',
+        content: note, ref_ids: sourceMessageIds,
+        metadata: { entity_type: 'validation_record', title, source: 'manual', review_status: 'adopted' },
+      });
+      if (saved._error) return Response.json({ _error: saved._error, traceId }, { status: 200 });
+      return Response.json({ payload: { message: saved.data?.[0] || null, room: validationRoom }, traceId }, { status: 200 });
+    }
+    if (action === 'promote_product') {
+      const messageId = body.message_id || body.messageId;
+      const authorName = typeof body.author_name === 'string' && body.author_name.trim() ? body.author_name.trim() : '사람 승인';
+      if (!messageId || typeof messageId !== 'string') return Response.json({ _error: 'message_id 필요', traceId }, { status: 200 });
+      const originals = await supabaseGet(`hajun_messages?id=eq.${encodeURIComponent(messageId)}&limit=1`);
+      const original = originals?.[0] as Record<string, unknown> | undefined;
+      const originalMetadata = original?.metadata as Record<string, unknown> | null | undefined;
+      if (!original || originalMetadata?.entity_type !== 'product_candidate') return Response.json({ _error: '상품 후보 원문을 찾을 수 없습니다', traceId }, { status: 200 });
+      const sourceRoomMessages = await supabaseGet(`hajun_messages?room_id=eq.${encodeURIComponent(String(original.room_id))}&limit=500`);
+      const confirmation = (sourceRoomMessages || []).find((message: Record<string, unknown>) => {
+        const metadata = message.metadata as Record<string, unknown> | null | undefined;
+        return metadata?.entity_type === 'product_decision' && metadata.decision === 'confirmed'
+          && Array.isArray(message.ref_ids) && message.ref_ids.includes(messageId);
+      });
+      if (!confirmation) return Response.json({ _error: '먼저 사람이 확인한 상품만 승인상품방으로 보낼 수 있습니다', traceId }, { status: 200 });
+      const validationYard = await getYardByKey('product_validation');
+      if (!validationYard) return Response.json({ _error: '상품검증마당을 찾을 수 없습니다', traceId }, { status: 200 });
+      const rooms = await getRoomsByYardId(validationYard.id);
+      const approvedRoom = (rooms || []).find((room: { key?: string }) => room.key === 'approved_products');
+      if (!approvedRoom) return Response.json({ _error: '승인상품방을 찾을 수 없습니다', traceId }, { status: 200 });
+      const existing = await supabaseGet(`hajun_messages?room_id=eq.${encodeURIComponent(approvedRoom.id)}&limit=500`);
+      const alreadyPromoted = (existing || []).find((message: Record<string, unknown>) => {
+        const metadata = message.metadata as Record<string, unknown> | null | undefined;
+        return metadata?.entity_type === 'product_decision' && metadata.decision === 'approved' && metadata.promoted_message_id === messageId;
+      });
+      if (alreadyPromoted) return Response.json({ payload: { message: alreadyPromoted, already_promoted: true }, traceId }, { status: 200 });
+      const promoted = await insertHajunMessage({
+        room_id: approvedRoom.id, author_type: 'human', author_name: authorName, msg_type: 'decision',
+        content: `상품을 승인상품방으로 이동함\n상품 식별자: ${String(originalMetadata.internal_code || '')}`,
+        ref_ids: [messageId, String(confirmation.id)],
+        metadata: { entity_type: 'product_decision', decision: 'approved', review_status: 'confirmed', promoted_message_id: messageId, confirmation_message_id: confirmation.id, internal_code: originalMetadata.internal_code, source: originalMetadata.source, source_product_code: originalMetadata.source_product_code },
+      });
+      if (promoted._error) return Response.json({ _error: promoted._error, traceId }, { status: 200 });
+      return Response.json({ payload: { message: promoted.data?.[0] || null, approved_room: approvedRoom }, traceId }, { status: 200 });
+    }
     if (action === 'ai_respond') {
       const { room_id, ref_ids = [] } = body as { room_id?: string; ref_ids?: string[] };
       if (!room_id) return Response.json({ _error: 'room_id 필요', traceId }, { status: 200 });

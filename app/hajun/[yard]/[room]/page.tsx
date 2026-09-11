@@ -29,6 +29,7 @@ const S: Record<string, React.CSSProperties> = {
   collapseBtn: { fontSize: 10, padding: '3px 7px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--bg3)', color: 'var(--text3)', cursor: 'pointer' },
   statusChip: { fontSize: 10, padding: '2px 7px', borderRadius: 4, fontFamily: 'JetBrains Mono, monospace', fontWeight: 700 },
   confirmBtn: { fontSize: 10, padding: '3px 8px', border: '1px solid rgba(63,185,80,0.6)', borderRadius: 5, background: 'rgba(63,185,80,0.12)', color: '#3FB950', cursor: 'pointer' },
+  promoteBtn: { fontSize: 10, padding: '3px 8px', border: '1px solid rgba(210,168,255,0.6)', borderRadius: 5, background: 'rgba(210,168,255,0.12)', color: '#D2A8FF', cursor: 'pointer' },
   messageCopyBtn: { fontSize: 10, padding: '3px 7px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--bg3)', color: 'var(--text3)', cursor: 'pointer' },
   content:   { fontSize: 13, color: 'var(--text)', lineHeight: 1.65, whiteSpace: 'pre-wrap', wordBreak: 'break-word' as const },
   contentCollapsed: { maxHeight: 96, overflow: 'hidden', position: 'relative' as const, opacity: 0.78 },
@@ -76,7 +77,9 @@ export default function RoomPage() {
   const [posting, setPosting]   = useState(false);
   const [aiResponding, setAiResponding] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [promotingId, setPromotingId] = useState<string | null>(null);
   const [savingContext, setSavingContext] = useState(false);
+  const [savingValidation, setSavingValidation] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [errMsg, setErrMsg]     = useState('');
@@ -308,6 +311,55 @@ export default function RoomPage() {
 
   const findMsg = (id: string) => messages.find((m) => m.id === id);
 
+  const saveValidationContext = async () => {
+    if (selectedRefs.size === 0 || savingValidation) return;
+    setSavingValidation(true);
+    setErrMsg('');
+    const title = contextLabel.trim() || '상품 검증 기록';
+    try {
+      const res = await fetch('/api/hajun?action=save_validation_context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_message_ids: Array.from(selectedRefs), title, author_name: authorName || '사람 검토' }),
+      });
+      const json = await res.json();
+      if (json._error) setErrMsg(json._error);
+      else {
+        setContextLabel('');
+        setSelectedRefs(new Set());
+        setCopyStatus('검증방에 기록됨');
+        window.setTimeout(() => setCopyStatus(''), 2200);
+      }
+    } catch (error) {
+      setErrMsg(error instanceof Error ? error.message : '검증방 기록에 실패했습니다');
+    } finally {
+      setSavingValidation(false);
+    }
+  };
+
+  const promoteProduct = async (messageId: string) => {
+    if (promotingId) return;
+    setPromotingId(messageId);
+    setErrMsg('');
+    try {
+      const res = await fetch('/api/hajun?action=promote_product', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_id: messageId, author_name: authorName || '사람 승인' }),
+      });
+      const json = await res.json();
+      if (json._error) setErrMsg(json._error);
+      else {
+        setCopyStatus(json.payload?.already_promoted ? '이미 승인상품방에 있음' : '승인상품방에 기록됨');
+        window.setTimeout(() => setCopyStatus(''), 2200);
+      }
+    } catch (error) {
+      setErrMsg(error instanceof Error ? error.message : '승인상품방 승격에 실패했습니다');
+    } finally {
+      setPromotingId(null);
+    }
+  };
+
   const toggleMessageCollapsed = (id: string) => {
     setCollapsedMessages((previous) => {
       const next = new Set(previous);
@@ -410,6 +462,18 @@ export default function RoomPage() {
                   </button>
                 </div>
               )}
+              {isProductCandidate && hasConfirmation && (
+                <div style={{ marginTop: 10 }}>
+                  <button
+                    type="button"
+                    style={S.promoteBtn}
+                    onClick={() => promoteProduct(m.id)}
+                    disabled={promotingId !== null}
+                  >
+                    {promotingId === m.id ? '승인상품방 기록 중...' : '승인상품방으로 보내기'}
+                  </button>
+                </div>
+              )}
               {m.ref_ids.length > 0 && (
                 <div style={S.refRow}>
                   <span style={S.refLabel}>↳ 딛고 있음:</span>
@@ -463,6 +527,14 @@ export default function RoomPage() {
                   disabled={savingContext || selectedRefs.size === 0}
                 >
                   {savingContext ? '맥락 저장 중...' : `선택 맥락 저장 (${selectedRefs.size})`}
+                </button>
+                <button
+                  type="button"
+                  style={{ ...S.contextBtn, ...(savingValidation || selectedRefs.size === 0 ? S.submitOff : {}) }}
+                  onClick={saveValidationContext}
+                  disabled={savingValidation || selectedRefs.size === 0}
+                >
+                  {savingValidation ? '검증방 기록 중...' : `검증방에 기록 (${selectedRefs.size})`}
                 </button>
               </div>
               <div style={S.refPicker}>

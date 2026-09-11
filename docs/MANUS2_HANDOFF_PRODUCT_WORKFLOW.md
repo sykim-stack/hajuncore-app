@@ -269,8 +269,8 @@ git diff --check
 
 1. **Chrome 실사용 검증:** 최신 `brainpool-core-final`을 로드하고 네이버 쇼핑 검색·상품 페이지에서 시장조사방 저장을 확인한다.
 2. **운영 배포 확인:** Vercel에 `hajuncore-app` 최신 `master`가 배포되었는지 확인한다.
-3. **검증방 연결 UI:** 상품발굴방 원문과 시장조사방 조사 결과를 선택하여 검증방에 참조 메시지를 만드는 흐름을 명시적으로 제공한다.
-4. **승인상품 승격:** 사람이 확인한 `product_decision`을 승인상품방에 append하는 명시적 액션을 추가한다. 자동 승인과 구분해야 한다.
+3. **검증방 연결 UI:** 완료. 여러 메시지를 선택해 `검증방에 기록`을 누르면 검증방에 참조 메시지를 append한다.
+4. **승인상품 승격:** 완료. 사람 확인된 상품 후보에서 `승인상품방으로 보내기`를 눌러 승인상품방에 append한다. 사람 확인 없이는 실행되지 않는다.
 5. **시장조사 식별 연결:** 네이버 검색 결과의 여러 상품을 개별 상품 단위로 저장할 필요가 있는지 결정한다. 현재 구현은 페이지 전체를 하나의 조사 메시지로 저장한다.
 6. **상품 후보 상태 모델:** `adopted`, `confirmed`, `rejected` 등 상태를 확장할 경우 기존 append-only 원칙과 API 계약을 먼저 갱신한다.
 7. **migration 운영 이력:** `supabase/migrations/20260909_product_validation_metadata.sql`의 운영 적용 이력을 실제 배포 기록에 명확히 남긴다.
@@ -303,6 +303,13 @@ git diff --check
 8. 운영 시장조사방에서 저장된 `market_research` 메시지를 확인한다.
 9. 결과와 오류를 이 문서의 작업 로그에 남긴다.
 
+검증방 연결 API와 승인상품 승격 API는 다음과 같다.
+
+```text
+POST /api/hajun?action=save_validation_context
+POST /api/hajun?action=promote_product
+```
+
 ## References
 
 [1]: https://hajuncore-app.vercel.app "HajunCore 운영 앱"
@@ -320,3 +327,13 @@ git diff --check
 - 검증: 문서 작성 완료. 코드 변경은 포함하지 않았다.
 - 다음 작업: Manus 2는 Chrome 실사용 저장 흐름을 먼저 검증한 뒤 검증방 연결과 승인상품 승격을 구현한다.
 - 주의: 자동 승인, 자동 동일상품 확정, 원문 이중 저장을 추가하지 않는다.
+
+### 작업 로그: 2026-09-11 10:26
+
+- 담당: Manus
+- 작업: 선택 메시지를 검증방에 연결하고 사람 확인 상품을 승인상품방에 승격하는 흐름 구현
+- 변경 파일: `app/api/hajun/route.ts`, `app/hajun/[yard]/[room]/page.tsx`
+- 결정: `save_validation_context`는 선택한 원문 ID를 검증방 메시지의 `ref_ids`로 저장한다. `promote_product`는 기존 `product_decision=confirmed`가 존재하는 상품만 승인상품방에 append한다. 두 기능 모두 원문을 수정·삭제·복제하지 않는다.
+- 검증: `npm run test:product-validation` 6개 통과, `npm run build` 통과, `git diff --check` 통과
+- 다음 작업: 배포 후 여러 메시지 선택 → `검증방에 기록`, 사람 확인 → `승인상품방으로 보내기`의 운영 UI를 확인한다.
+- 주의: 승인상품방 승격은 자동 승인 기능이 아니다. 사람 확인 메시지가 없으면 API가 거부한다.

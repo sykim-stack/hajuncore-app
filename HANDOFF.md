@@ -216,3 +216,12 @@ AI 분석은 판매 승인과 다르다. 사람의 확정 전에는 CoreHub 운�
 - 검증: `npm run test:product-validation`, `npm run build`, `git diff --check` 실행 예정
 - 다음 작업: 배포 후 네이버 시장조사 메시지에서 `펼치기` 옆 `복사` 버튼을 눌러 전체 원문 확인
 - 주의: 브라우저 클립보드 권한이 막히면 fallback 복사를 시도하고 실패 문구를 표시한다.
+
+### 작업 로그: 2026-09-11 10:26
+- 담당: Manus
+- 작업: 상품검증 남은 핵심 흐름인 검증방 연결과 승인상품방 승격 구현
+- 변경 파일: `app/api/hajun/route.ts`, `app/hajun/[yard]/[room]/page.tsx`, `docs/MANUS2_HANDOFF_PRODUCT_WORKFLOW.md`
+- 결정: 선택 메시지는 `POST /api/hajun?action=save_validation_context`로 검증방에 `ref_ids`를 가진 `validation_record` 메시지로 append한다. 사람 확인된 후보만 `POST /api/hajun?action=promote_product`로 승인상품방에 `product_decision=approved` 메시지를 append한다.
+- 검증: `npm run test:product-validation` 6개 통과, `npm run build` 통과, `git diff --check` 통과
+- 다음 작업: 배포 후 검증방 기록과 승인상품방 승격을 운영 UI에서 실제 확인
+- 주의: 원문 수정·삭제·이중 복제 금지; AI 결과와 네이버 조사만으로 승인하지 않음
