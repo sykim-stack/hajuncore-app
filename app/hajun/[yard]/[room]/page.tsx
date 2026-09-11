@@ -31,6 +31,7 @@ const S: Record<string, React.CSSProperties> = {
   confirmBtn: { fontSize: 10, padding: '3px 8px', border: '1px solid rgba(63,185,80,0.6)', borderRadius: 5, background: 'rgba(63,185,80,0.12)', color: '#3FB950', cursor: 'pointer' },
   promoteBtn: { fontSize: 10, padding: '3px 8px', border: '1px solid rgba(210,168,255,0.6)', borderRadius: 5, background: 'rgba(210,168,255,0.12)', color: '#D2A8FF', cursor: 'pointer' },
   messageCopyBtn: { fontSize: 10, padding: '3px 7px', border: '1px solid var(--border)', borderRadius: 5, background: 'var(--bg3)', color: 'var(--text3)', cursor: 'pointer' },
+  messageSelectBtn: { fontSize: 10, padding: '3px 7px', border: '1px solid rgba(88,166,255,0.6)', borderRadius: 5, background: 'rgba(88,166,255,0.10)', color: 'var(--accent)', cursor: 'pointer' },
   content:   { fontSize: 13, color: 'var(--text)', lineHeight: 1.65, whiteSpace: 'pre-wrap', wordBreak: 'break-word' as const },
   contentCollapsed: { maxHeight: 96, overflow: 'hidden', position: 'relative' as const, opacity: 0.78 },
   refRow:    { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' },
@@ -445,6 +446,15 @@ export default function RoomPage() {
                   title="이 메시지의 전체 원문을 복사합니다"
                 >
                   {copiedMessageId === m.id ? '복사됨' : '복사'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => toggleRef(m.id)}
+                  style={{ ...S.messageSelectBtn, ...(selectedRefs.has(m.id) ? { background: 'rgba(88,166,255,0.28)', color: 'var(--text)', borderColor: 'var(--accent)' } : {}) }}
+                  aria-pressed={selectedRefs.has(m.id)}
+                  title="검증방 기록이나 맥락 저장에 사용할 메시지를 선택합니다"
+                >
+                  {selectedRefs.has(m.id) ? '선택됨' : '선택'}
                 </button>
               </div>
               <div style={{ ...S.content, ...(collapsedMessages.has(m.id) ? S.contentCollapsed : {}) }}>
