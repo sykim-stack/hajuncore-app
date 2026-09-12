@@ -323,6 +323,17 @@ export async function GET(req: Request) {
       return Response.json({ payload: { room: room[0], messages }, traceId: createTraceId() });
     }
 
+    if (action === 'recommendations') {
+      const roomId = searchParams.get('room_id');
+      if (!roomId) return Response.json({ _error: 'room_id 파라미터 필요' }, { status: 200 });
+      const messages = await supabaseGet(`hajun_messages?room_id=eq.${encodeURIComponent(roomId)}&order=created_at.desc&limit=100`);
+      const recommendations = (messages || []).filter((message: Record<string, unknown>) => {
+        const metadata = message.metadata as Record<string, unknown> | null | undefined;
+        return metadata?.entity_type === 'product_recommendation';
+      });
+      return Response.json({ payload: { recommendations }, traceId: createTraceId() });
+    }
+
     if (action === 'view_livingroom' || action === 'view_yard') {
       const yardKey = searchParams.get('yard');
       if (!yardKey) return Response.json({ _error: 'yard 파라미터 필요' }, { status: 200 });

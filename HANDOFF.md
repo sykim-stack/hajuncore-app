@@ -243,3 +243,12 @@ AI 분석은 판매 승인과 다르다. 사람의 확정 전에는 CoreHub 운�
 - 검증: `npm run test:product-validation` 6개 통과, `npm run build` 통과, `git diff --check` 통과
 - 다음 작업: 추천 Message를 선택한 뒤 온채널 후보 캡처에 `ref_ids`로 연결한다.
 - 주의: AI 추천만으로 승인하지 않으며, 추천 결과는 사람의 공급처 검색을 시작하기 위한 제안이다.
+
+### 작업 로그: 2026-09-12 10:56
+- 담당: Manus
+- 작업: BRAINPOOL Core 팝업에서 AI 추천 Message를 선택하고 온채널 공급처 후보 캡처에 `ref_ids`로 연결
+- 변경 파일: `app/api/hajun/route.ts`, `brainpool-core-final/background.js`, `brainpool-core-final/popup/popup.html`, `brainpool-core-final/popup/popup.js`
+- 결정: 추천 목록은 `recommendations?room_id=` API로 읽고, 캡처 시 선택된 추천 ID를 후보 Message의 `ref_ids`에 넣는다. 추천 선택은 선택사항이며 미선택 캡처도 기존처럼 동작한다.
+- 검증: 하준코어 상품검증 테스트 6개 통과, 하준코어 build 통과, 확장 프로그램 JS·manifest 문법 통과
+- 다음 작업: 네이버 시장조사 캡처에도 선택된 공급처 후보 ID를 연결한다.
+- 주의: 후보 캡처는 추천을 승인으로 바꾸지 않으며, 동일상품·품질·판매 가능성 판단은 검증 단계에서 사람이 결정한다.
