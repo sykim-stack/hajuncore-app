@@ -225,3 +225,12 @@ AI 분석은 판매 승인과 다르다. 사람의 확정 전에는 CoreHub 운�
 - 검증: `npm run test:product-validation` 6개 통과, `npm run build` 통과, `git diff --check` 통과
 - 다음 작업: 배포 후 검증방 기록과 승인상품방 승격을 운영 UI에서 실제 확인
 - 주의: 원문 수정·삭제·이중 복제 금지; AI 결과와 네이버 조사만으로 승인하지 않음
+
+### 작업 로그: 2026-09-12 10:12
+- 담당: Manus
+- 작업: 상품 운영 V2를 방 중심이 아닌 HajunAI Message 중심의 이벤트 흐름으로 재정의
+- 변경 파일: `docs/PRODUCT_WORKFLOW_V2_PROPOSAL.md`, `docs/PRODUCT_WORKFLOW_MESSAGE_ARCHITECTURE.md`
+- 결정: 방은 View이고 `hajun_messages`가 원본 사건 기록이다. 추천·공급처 후보·시장조사·검증·콘텐츠·승인·판매 시작은 Message graph로 `ref_ids` 연결한다. CoreHub 분석·상태 변화는 `corehub_event` Message로 남기며 오늘의 발견은 이벤트 상태 View로 표현한다.
+- 검증: 문서 diff check 예정; 코드 변경은 포함하지 않음
+- 다음 작업: AI 추천 Message와 추천 View부터 구현하고 공급처 캡처 시 추천 메시지 ref 연결을 추가한다.
+- 주의: 단계별 별도 원본 DB를 만들지 않으며, 기존 `product_candidate` 운영 데이터는 일괄 변경하지 않는다.
