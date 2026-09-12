@@ -663,6 +663,30 @@ export async function POST(req: Request) {
       if (promoted._error) return Response.json({ _error: promoted._error, traceId }, { status: 200 });
       return Response.json({ payload: { message: promoted.data?.[0] || null, approved_room: approvedRoom }, traceId }, { status: 200 });
     }
+    if (action === 'recommend_product') {
+      const roomId = typeof body.room_id === 'string' ? body.room_id : '';
+      const request = typeof body.request === 'string' ? body.request.trim() : '';
+      const authorName = typeof body.author_name === 'string' && body.author_name.trim() ? body.author_name.trim() : 'HajunAI';
+      if (!roomId || !request) return Response.json({ _error: 'room_id와 추천 조건이 필요합니다', traceId }, { status: 200 });
+      if (!GROQ_KEY) return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
+      const recommendation = await callGroq(
+        '당신은 상품 운영 전략가입니다. 현재 시점에 온라인 판매를 검토할 상품 기회를 한국어로 추천하세요. 과장하지 말고 근거와 위험을 함께 적으세요. 다음 형식을 지키세요: 추천 상품/추천 이유/검색 키워드/타깃 고객/예상 가격대/위험 요소/다음 행동.',
+        request,
+        [],
+      );
+      if (recommendation._error) return Response.json({ _error: recommendation._error, traceId }, { status: 200 });
+      const saved = await insertHajunMessage({
+        room_id: roomId,
+        author_type: 'ai',
+        author_name: authorName,
+        msg_type: 'work_result',
+        content: recommendation.text,
+        ref_ids: [],
+        metadata: { entity_type: 'product_recommendation', request, recommendation_status: 'adopted', created_by: 'ai' },
+      });
+      if (saved._error) return Response.json({ _error: saved._error, traceId }, { status: 200 });
+      return Response.json({ payload: saved.data?.[0] || null, traceId }, { status: 200 });
+    }
     if (action === 'ai_respond') {
       const { room_id, ref_ids = [] } = body as { room_id?: string; ref_ids?: string[] };
       if (!room_id) return Response.json({ _error: 'room_id 필요', traceId }, { status: 200 });

@@ -225,7 +225,7 @@ View:
 
 ## 8. 구현 순서
 
-1. AI 상품 추천 메시지 생성과 추천 View를 추가한다.
+1. AI 상품 추천 메시지 생성과 추천 View를 추가한다. **초기 구현 완료:** 상품발굴방 하단의 `AI 상품 추천` 입력은 `product_recommendation` Message를 생성한다.
 2. 공급처 캡처 전에 추천 메시지를 선택하여 `ref_ids`로 연결한다.
 3. 네이버 시장조사 캡처에 공급처 후보 메시지 ID를 연결한다.
 4. 검증방의 `validation_decision`과 `pass/hold/reject`를 구조화한다.

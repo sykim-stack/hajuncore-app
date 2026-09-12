@@ -234,3 +234,12 @@ AI 분석은 판매 승인과 다르다. 사람의 확정 전에는 CoreHub 운�
 - 검증: 문서 diff check 예정; 코드 변경은 포함하지 않음
 - 다음 작업: AI 추천 Message와 추천 View부터 구현하고 공급처 캡처 시 추천 메시지 ref 연결을 추가한다.
 - 주의: 단계별 별도 원본 DB를 만들지 않으며, 기존 `product_candidate` 운영 데이터는 일괄 변경하지 않는다.
+
+### 작업 로그: 2026-09-12 10:23
+- 담당: Manus
+- 작업: Message 중심 상품 운영의 첫 실제 기능으로 상품발굴방에 AI 상품 추천 Message 생성 추가
+- 변경 파일: `app/api/hajun/route.ts`, `app/hajun/[yard]/[room]/page.tsx`, `docs/PRODUCT_WORKFLOW_MESSAGE_ARCHITECTURE.md`
+- 결정: 사용자가 현재 조건을 입력하면 `recommend_product` API가 AI 추천을 생성하고 `metadata.entity_type=product_recommendation`, `msg_type=work_result`로 현재 상품발굴방에 append한다. 추천은 공급처 후보나 승인상품이 아니다.
+- 검증: `npm run test:product-validation` 6개 통과, `npm run build` 통과, `git diff --check` 통과
+- 다음 작업: 추천 Message를 선택한 뒤 온채널 후보 캡처에 `ref_ids`로 연결한다.
+- 주의: AI 추천만으로 승인하지 않으며, 추천 결과는 사람의 공급처 검색을 시작하기 위한 제안이다.

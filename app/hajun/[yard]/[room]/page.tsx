@@ -56,6 +56,8 @@ const S: Record<string, React.CSSProperties> = {
   contextRow: { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' as const },
   contextInput: { flex: '1 1 220px', minWidth: 180, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', padding: '6px 9px', fontSize: 11, outline: 'none' },
   contextBtn: { fontSize: 11, padding: '6px 9px', border: '1px solid rgba(88,166,255,0.6)', borderRadius: 6, background: 'rgba(88,166,255,0.12)', color: 'var(--accent)', cursor: 'pointer' },
+  recommendationBox: { marginBottom: 12, padding: 12, background: 'rgba(57,197,207,0.07)', border: '1px solid rgba(57,197,207,0.3)', borderRadius: 8 },
+  recommendationHint: { fontSize: 11, lineHeight: 1.5, color: 'var(--text2)', marginBottom: 8 },
   refToggle: { fontSize: 11, padding: '4px 9px', borderRadius: 6, cursor: 'pointer', border: '1px solid var(--border)', fontFamily: 'JetBrains Mono, monospace' },
   btnRow:    { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' as const },
   submitBtn: { padding: '9px 20px', background: 'var(--accent)', color: '#0D1117', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer' },
@@ -88,6 +90,7 @@ export default function RoomPage() {
   const [promotingId, setPromotingId] = useState<string | null>(null);
   const [savingContext, setSavingContext] = useState(false);
   const [savingValidation, setSavingValidation] = useState(false);
+  const [recommending, setRecommending] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [errMsg, setErrMsg]     = useState('');
@@ -97,6 +100,7 @@ export default function RoomPage() {
   const [authorName, setAuthorName] = useState('여리');
   const [selectedRefs, setSelectedRefs] = useState<Set<string>>(new Set());
   const [contextLabel, setContextLabel] = useState('');
+  const [recommendationRequest, setRecommendationRequest] = useState('');
   // [UI 복원 2026-09-10] 긴 저장 원문을 기본 접고, 사용자가 필요할 때 펼친다.
   const [collapsedMessages, setCollapsedMessages] = useState<Set<string>>(new Set());
 
@@ -199,6 +203,31 @@ export default function RoomPage() {
       }
     } finally {
       setAiResponding(false);
+    }
+  };
+
+  const requestRecommendation = async () => {
+    if (!room || !recommendationRequest.trim() || recommending) return;
+    setRecommending(true);
+    setErrMsg('');
+    try {
+      const res = await fetch('/api/hajun?action=recommend_product', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ room_id: room.id, request: recommendationRequest.trim(), author_name: 'HajunAI' }),
+      });
+      const json = await res.json();
+      if (json._error) setErrMsg(json._error);
+      else {
+        setRecommendationRequest('');
+        await load();
+        setCopyStatus('AI 추천이 저장됨');
+        window.setTimeout(() => setCopyStatus(''), 2200);
+      }
+    } catch (error) {
+      setErrMsg(error instanceof Error ? error.message : 'AI 추천 요청에 실패했습니다');
+    } finally {
+      setRecommending(false);
     }
   };
 
@@ -543,6 +572,28 @@ export default function RoomPage() {
         </div>
 
         <div style={S.compose}>
+          {yardKey === 'product_validation' && roomKey === 'product_discovery' && (
+            <div style={S.recommendationBox}>
+              <div style={S.workflowTitle}>AI 상품 추천</div>
+              <div style={S.recommendationHint}>현재 계절·시장·고객·목표 마진을 적으면 추천 결과를 이 방의 Message로 저장합니다. 추천 후 공급처에서 실제 후보를 찾아보세요.</div>
+              <div style={S.contextRow}>
+                <input
+                  style={S.contextInput}
+                  value={recommendationRequest}
+                  onChange={(event) => setRecommendationRequest(event.target.value)}
+                  placeholder="예: 9월 차량용품, 경쟁이 너무 심하지 않고 30% 마진 가능한 상품"
+                />
+                <button
+                  type="button"
+                  style={{ ...S.aiBtn, ...(recommending || !recommendationRequest.trim() ? S.submitOff : {}) }}
+                  onClick={requestRecommendation}
+                  disabled={recommending || !recommendationRequest.trim()}
+                >
+                  {recommending ? '추천 생성 중...' : 'AI 상품 추천'}
+                </button>
+              </div>
+            </div>
+          )}
           <div style={S.row}>
             <select style={S.select} value={msgType} onChange={(e) => setMsgType(e.target.value as MsgType)}>
               {MSG_TYPE_ORDER.map((t) => (
