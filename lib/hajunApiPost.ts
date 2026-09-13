@@ -173,8 +173,8 @@ export async function POST(req: Request) {
       if (!message || typeof message !== 'string' || message.trim() === '') {
         return Response.json({ _error: '메시지가 비어있습니다', traceId }, { status: 200 });
       }
-      if (!GROQ_KEY && !GEMINI_KEY) {
-        return Response.json({ _error: 'GROQ_API_KEY / GEMINI_API_KEY 모두 미설정', traceId }, { status: 200 });
+      if (!process.env.NVIDIA_API_KEY && !process.env.NIM_API_KEY && !GROQ_KEY && !GEMINI_KEY) {
+        return Response.json({ _error: 'NVIDIA_API_KEY / GROQ_API_KEY / GEMINI_API_KEY 중 하나 필요', traceId }, { status: 200 });
       }
       const [contextSummary, mindWorldSummary, opportunities, understandingText] = await Promise.all([
         fetchContextSummary(),
