@@ -6,10 +6,17 @@ export const SUPABASE_URL = process.env.SUPABASE_URL!;
 export const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
 export const GEMINI_KEY  = process.env.GEMINI_API_KEY!;
 export const GROQ_KEY    = process.env.GROQ_API_KEY!;
-/** 기본: 개발 키에서 접근 가능한 instant. 70b는 플랜 제한 시 model_not_found */
-export const GROQ_MODEL  = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
+/** 선택. 비어 있으면 Groq 후보 목록 → 실패 시 Gemini 폴백 */
+export const GROQ_MODEL  = process.env.GROQ_MODEL || '';
 export const HOUSE_ID    = '6341b872-4555-4fdc-8f1d-8009b2b1764f';
 export const COREHUB_URL = process.env.COREHUB_URL || 'https://brainpool-corehub.vercel.app';
+
+const GROQ_MODEL_CANDIDATES = [
+  GROQ_MODEL,
+  'llama-3.1-8b-instant',
+  'llama-3.3-70b-versatile',
+  'openai/gpt-oss-20b',
+].filter(Boolean);
 
 export function createTraceId() {
   return 'tr-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
@@ -217,6 +224,74 @@ export async function saveConversation(payload: {
   } catch { /* ignore */ }
 }
 
+async function callGeminiChat(
+  systemPrompt: string,
+  userMessage: string,
+  history: Array<{ role: string; content: string }>
+): Promise<{ text?: string; _error?: string }> {
+  if (!GEMINI_KEY) return { _error: 'GEMINI_API_KEY 미설정 (Groq도 사용 불가)' };
+
+  const contents: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+  for (const h of history) {
+    contents.push({
+      role: h.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: h.content }],
+    });
+  }
+  contents.push({ role: 'user', parts: [{ text: userMessage }] });
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents,
+        generationConfig: { temperature: 0.4, maxOutputTokens: 1024 },
+      }),
+    }
+  );
+  if (!res.ok) return { _error: `Gemini 오류: ${await res.text()}` };
+  const data = await res.json();
+  const parts = data.candidates?.[0]?.content?.parts || [];
+  const text = parts
+    .filter((p: { thought?: boolean; text?: string }) => !p.thought && typeof p.text === 'string')
+    .map((p: { text: string }) => p.text)
+    .join('')
+    .trim();
+  if (!text) return { _error: 'Gemini 빈 응답' };
+  return { text };
+}
+
+async function callGroqOnce(
+  model: string,
+  messages: Array<{ role: string; content: string }>
+): Promise<{ text?: string; _error?: string }> {
+  if (!GROQ_KEY) return { _error: 'GROQ_API_KEY 미설정' };
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${GROQ_KEY}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.4,
+      max_tokens: 1024,
+    }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    return { _error: `Groq(${model}): ${errText}` };
+  }
+  const data = await res.json();
+  const text = data.choices?.[0]?.message?.content || '';
+  return { text };
+}
+
+/** Groq 후보 시도 → 전부 실패 시 Gemini 폴백 (synthesize와 동일 키) */
 export async function callGroq(
   systemPrompt: string,
   userMessage: string,
@@ -227,26 +302,27 @@ export async function callGroq(
     ...history.map((h) => ({ role: h.role === 'user' ? 'user' : 'assistant', content: h.content })),
     { role: 'user', content: userMessage },
   ];
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${GROQ_KEY}`,
-    },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      messages,
-      temperature: 0.4,
-      max_tokens: 1024,
-    }),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    return { _error: `Groq API 오류: ${errText}` };
+
+  const errors: string[] = [];
+  if (GROQ_KEY) {
+    const tried = new Set<string>();
+    for (const model of GROQ_MODEL_CANDIDATES) {
+      if (tried.has(model)) continue;
+      tried.add(model);
+      const result = await callGroqOnce(model, messages);
+      if (result.text) return { text: result.text };
+      if (result._error) errors.push(result._error);
+    }
+  } else {
+    errors.push('GROQ_API_KEY 미설정');
   }
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content || '';
-  return { text };
+
+  const gemini = await callGeminiChat(systemPrompt, userMessage, history);
+  if (gemini.text) return { text: gemini.text };
+
+  return {
+    _error: `채팅 모델 전부 실패. Groq: ${errors.slice(0, 2).join(' | ')} / Gemini: ${gemini._error || '없음'}`,
+  };
 }
 
 export function parseReply(raw: string): { reply: string; observations: string[] } {
