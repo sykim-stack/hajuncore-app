@@ -4,9 +4,11 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import Sidebar from '@/components/Sidebar';
 import {
-  HajunYard, HajunRoom, HajunMessage,
+  HajunRoom, HajunMessage,
   MSG_TYPE_LABEL, MSG_TYPE_COLOR, MSG_TYPE_ORDER, MsgType, YARD_LABEL,
 } from '@/types/hajun';
+
+type DecisionValue = 'pass' | 'hold' | 'reject';
 
 const S: Record<string, React.CSSProperties> = {
   page:  { display: 'flex', minHeight: '100vh', background: 'var(--bg)' },
@@ -42,6 +44,10 @@ const S: Record<string, React.CSSProperties> = {
   aiBtn:     { padding: '9px 20px', background: '#39C5CF', color: '#0D1117', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer' },
   submitOff: { background: 'var(--bg3)', color: 'var(--text3)', cursor: 'not-allowed' },
   errMsg:    { fontSize: 12, color: 'var(--warn)', marginTop: 8 },
+  okMsg:     { fontSize: 12, color: '#3FB950', marginTop: 8 },
+  decisionBox: { marginBottom: 12, padding: 12, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 8 },
+  decisionTitle: { fontSize: 12, fontWeight: 700, marginBottom: 8, color: 'var(--text2)' },
+  decisionHint: { fontSize: 11, color: 'var(--text3)', marginBottom: 8 },
 };
 
 function chip(type: MsgType) {
@@ -54,10 +60,60 @@ function fmtTime(iso: string) {
   return d.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+function resolveInternalCode(messages: HajunMessage[], selectedRefs: Set<string>): string {
+  const selected = messages.filter((m) => selectedRefs.has(m.id));
+  for (const m of selected) {
+    const code = m.metadata?.internal_code;
+    if (typeof code === 'string' && code) return code;
+  }
+  for (const m of messages) {
+    if (m.metadata?.entity_type === 'product_candidate' && typeof m.metadata?.internal_code === 'string') {
+      return m.metadata.internal_code;
+    }
+  }
+  return '';
+}
+
 function ProductMessage({ message, duplicateCount = 1 }: { message: HajunMessage; duplicateCount?: number }) {
   const [expanded, setExpanded] = useState(false);
   const meta = message.metadata || {};
-  const isProduct = meta.entity_type === 'product_candidate';
+  const entity = String(meta.entity_type || '');
+
+  if (entity === 'product_validation_decision') {
+    const decision = String(meta.decision || '');
+    const color = decision === 'pass' ? '#3FB950' : decision === 'hold' ? '#F0883E' : '#F78166';
+    return (
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 700, color, marginBottom: 6 }}>
+          검증 결정: {decision || 'unknown'}
+        </div>
+        <div style={S.content}>{message.content}</div>
+        {typeof meta.internal_code === 'string' && (
+          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text2)' }}>
+            internal_code: <b>{meta.internal_code}</b>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (entity === 'listing_draft' || entity === 'listing_content' || entity === 'listing_published') {
+    return (
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
+          {entity} · {String(meta.status || '')}
+        </div>
+        <div style={S.content}>{message.content}</div>
+        {typeof meta.internal_code === 'string' && (
+          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text2)' }}>
+            internal_code: <b>{meta.internal_code}</b>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const isProduct = entity === 'product_candidate';
   if (!isProduct) {
     const preview = message.content.trim();
     const clipped = preview.length > 260;
@@ -103,12 +159,15 @@ export default function RoomPage() {
   const yardKey = params.yard as string;
   const roomKey = params.room as string;
 
+  const isValidationRoom = yardKey === 'product_validation' && roomKey === 'product_validation';
+
   const [room, setRoom]         = useState<HajunRoom | null>(null);
   const [messages, setMessages] = useState<HajunMessage[]>([]);
   const [loading, setLoading]   = useState(true);
   const [posting, setPosting]   = useState(false);
   const [aiResponding, setAiResponding] = useState(false);
   const [errMsg, setErrMsg]     = useState('');
+  const [okMsg, setOkMsg]       = useState('');
 
   const [content, setContent]   = useState('');
   const [msgType, setMsgType]   = useState<MsgType>('question');
@@ -119,7 +178,6 @@ export default function RoomPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    // room_id는 URL에 없으므로 room_list로 먼저 확정 (검증된 기존 action은 건드리지 않음)
     const listRes = await fetch(`/api/hajun?action=room_list&yard=${yardKey}`);
     const listJson = await listRes.json();
     const found: HajunRoom | undefined = listJson.payload?.rooms?.find(
@@ -132,7 +190,6 @@ export default function RoomPage() {
     const viewJson = await viewRes.json();
     setMessages(viewJson.payload?.messages || []);
     setLoading(false);
-    // 방에 들어오면 처음부터가 아니라 가장 최신 메시지부터 보이게
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'auto' }), 50);
   }, [yardKey, roomKey]);
 
@@ -159,6 +216,7 @@ export default function RoomPage() {
     if (!room || !content.trim() || posting) return;
     setPosting(true);
     setErrMsg('');
+    setOkMsg('');
     try {
       const res = await fetch('/api/hajun?action=post_message', {
         method: 'POST',
@@ -186,9 +244,64 @@ export default function RoomPage() {
     }
   };
 
-  // 두뇌 AI에게 이 방을 읽고 답해달라고 요청.
-  // selectedRefs가 있으면 "이 메시지들 보고 답해줘"로 넘기고,
-  // 없으면 서버가 알아서 방의 가장 최근 메시지를 대상으로 삼는다.
+  const submitDecision = async (decision: DecisionValue) => {
+    if (!room || posting) return;
+    const internalCode = resolveInternalCode(messages, selectedRefs);
+    if (!internalCode) {
+      setErrMsg('참조할 상품 후보를 선택하거나, 방에 product_candidate가 있어야 합니다.');
+      return;
+    }
+
+    const reason = content.trim() || (
+      decision === 'pass' ? '통과' : decision === 'hold' ? '보류' : '탈락'
+    );
+    const label = decision === 'pass' ? '통과' : decision === 'hold' ? '보류' : '탈락';
+
+    setPosting(true);
+    setErrMsg('');
+    setOkMsg('');
+    try {
+      const res = await fetch('/api/hajun?action=post_message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          room_id: room.id,
+          author_type: 'human',
+          author_name: authorName || '검증자',
+          msg_type: 'decision',
+          content: `${label}: ${reason}`,
+          ref_ids: Array.from(selectedRefs),
+          metadata: {
+            entity_type: 'product_validation_decision',
+            decision,
+            decision_reason: reason,
+            decided_at: new Date().toISOString(),
+            decided_by: 'human',
+            internal_code: internalCode,
+          },
+        }),
+      });
+      const json = await res.json();
+      if (json._error) {
+        setErrMsg(json._error);
+      } else {
+        setContent('');
+        setSelectedRefs(new Set());
+        if (decision === 'pass' && json.listing_draft?.id) {
+          setOkMsg(`pass 완료 → 등록대기 listing_draft 생성됨 (${json.listing_draft.id.slice(0, 8)}…)`);
+        } else if (decision === 'pass') {
+          setOkMsg('pass 완료. listing_draft는 등록대기방에서 확인하세요.');
+        } else {
+          setOkMsg(`${label} 결정이 저장되었습니다.`);
+        }
+        await load();
+        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+      }
+    } finally {
+      setPosting(false);
+    }
+  };
+
   const requestAi = async () => {
     if (!room || aiResponding) return;
     setAiResponding(true);
@@ -220,6 +333,7 @@ export default function RoomPage() {
     const code = message.metadata?.internal_code;
     return !code || all.findIndex((candidate) => candidate.metadata?.internal_code === code) === index;
   });
+  const currentCode = resolveInternalCode(messages, selectedRefs);
 
   return (
     <div style={S.page}>
@@ -283,6 +397,36 @@ export default function RoomPage() {
         </div>
 
         <div style={S.compose}>
+          {isValidationRoom && (
+            <div style={S.decisionBox}>
+              <div style={S.decisionTitle}>상품 검증 결정</div>
+              <div style={S.decisionHint}>
+                아래 참조에서 상품 후보를 선택한 뒤 판정하세요.
+                {currentCode ? ` · 대상: ${currentCode}` : ' · 대상 internal_code 미선택'}
+              </div>
+              <div style={S.btnRow}>
+                <button
+                  type="button"
+                  style={{ ...S.submitBtn, background: '#3FB950', ...(posting ? S.submitOff : {}) }}
+                  disabled={posting}
+                  onClick={() => submitDecision('pass')}
+                >pass 통과</button>
+                <button
+                  type="button"
+                  style={{ ...S.submitBtn, background: '#F0883E', ...(posting ? S.submitOff : {}) }}
+                  disabled={posting}
+                  onClick={() => submitDecision('hold')}
+                >hold 보류</button>
+                <button
+                  type="button"
+                  style={{ ...S.submitBtn, background: '#F78166', ...(posting ? S.submitOff : {}) }}
+                  disabled={posting}
+                  onClick={() => submitDecision('reject')}
+                >reject 탈락</button>
+              </div>
+            </div>
+          )}
+
           <div style={S.row}>
             <select style={S.select} value={msgType} onChange={(e) => setMsgType(e.target.value as MsgType)}>
               {MSG_TYPE_ORDER.map((t) => (
@@ -295,7 +439,7 @@ export default function RoomPage() {
           {messages.length > 0 && (
             <>
               <div style={S.refHint}>
-                참조할 이전 메시지 선택 (사람 글 작성 시 근거로, AI 요청 시 &quot;이거 보고 답해줘&quot;로 쓰임)
+                참조할 이전 메시지 선택 (검증 시 상품 후보 선택에 사용)
               </div>
               <div style={S.refPicker}>
                 {messages.map((m) => {
@@ -321,7 +465,7 @@ export default function RoomPage() {
 
           <textarea
             style={S.textarea}
-            placeholder="이 방에 남길 메시지..."
+            placeholder={isValidationRoom ? '검증 사유 (선택). 비우면 기본 문구 사용' : '이 방에 남길 메시지...'}
             value={content}
             onChange={(e) => setContent(e.target.value)}
           />
@@ -346,6 +490,7 @@ export default function RoomPage() {
           </div>
 
           {errMsg && <div style={S.errMsg}>⚠ {errMsg}</div>}
+          {okMsg && <div style={S.okMsg}>✅ {okMsg}</div>}
         </div>
       </main>
 
