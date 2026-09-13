@@ -60,6 +60,64 @@ function fmtTime(iso: string) {
   return d.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function CopyButtons({ text, summary }: { text: string; summary?: string }) {
+  const [note, setNote] = useState('');
+  const flash = (msg: string) => {
+    setNote(msg);
+    setTimeout(() => setNote(''), 1500);
+  };
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
+      {summary && (
+        <button
+          type="button"
+          onClick={async () => flash(await copyText(summary) ? '요약 복사됨' : '복사 실패')}
+          style={{ padding: '5px 9px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
+        >요약 복사</button>
+      )}
+      <button
+        type="button"
+        onClick={async () => flash(await copyText(text) ? '전체 복사됨' : '복사 실패')}
+        style={{ padding: '5px 9px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
+      >전체 복사</button>
+      <button
+        type="button"
+        onClick={async () => {
+          const selected = window.getSelection()?.toString() || '';
+          if (!selected) {
+            flash('텍스트를 드래그해서 선택하세요');
+            return;
+          }
+          flash(await copyText(selected) ? '선택 복사됨' : '복사 실패');
+        }}
+        style={{ padding: '5px 9px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
+      >선택 복사</button>
+      {note && <span style={{ fontSize: 11, color: '#3FB950' }}>{note}</span>}
+    </div>
+  );
+}
+
 function resolveInternalCode(messages: HajunMessage[], selectedRefs: Set<string>): string {
   const selected = messages.filter((m) => selectedRefs.has(m.id));
   for (const m of selected) {
@@ -93,6 +151,7 @@ function ProductMessage({ message, duplicateCount = 1 }: { message: HajunMessage
             internal_code: <b>{meta.internal_code}</b>
           </div>
         )}
+        <CopyButtons text={message.content} summary={typeof meta.internal_code === 'string' ? `${decision} / ${meta.internal_code}` : decision} />
       </div>
     );
   }
@@ -109,6 +168,7 @@ function ProductMessage({ message, duplicateCount = 1 }: { message: HajunMessage
             internal_code: <b>{meta.internal_code}</b>
           </div>
         )}
+        <CopyButtons text={message.content} summary={typeof meta.internal_code === 'string' ? `${entity} / ${meta.internal_code}` : entity} />
       </div>
     );
   }
@@ -127,6 +187,7 @@ function ProductMessage({ message, duplicateCount = 1 }: { message: HajunMessage
             style={{ display: 'block', marginTop: 10, padding: '5px 9px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
           >{expanded ? '원문 접기' : '원문 전체 보기'}</button>
         )}
+        <CopyButtons text={message.content} />
       </div>
     );
   }
@@ -150,6 +211,10 @@ function ProductMessage({ message, duplicateCount = 1 }: { message: HajunMessage
         style={{ display: 'block', marginTop: 10, padding: '5px 9px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
       >{expanded ? '원문 접기' : '원문 전체 보기'}</button>
       {expanded && <pre style={{ ...S.content, margin: '10px 0 0', maxHeight: 420, overflowY: 'auto', padding: 10, background: 'var(--bg3)', borderRadius: 6, whiteSpace: 'pre-wrap' }}>{message.content}</pre>}
+      <CopyButtons
+        text={message.content}
+        summary={[name, code ? `상품코드: ${code}` : '', price ? `공급가: ${price}` : ''].filter(Boolean).join('\n')}
+      />
     </div>
   );
 }
