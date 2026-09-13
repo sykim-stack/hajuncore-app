@@ -73,4 +73,5 @@ export const YARD_LABEL: Record<string, string> = {
   gaebal: '개발마당',
   brainpool: '브라이언풀마당',
   product_validation: '상품검증마당',
+  product_listing: '상품등록마당',
 };
