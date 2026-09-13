@@ -21,6 +21,55 @@ import {
   supabasePatch,
 } from '@/lib/hajunApiCore';
 
+async function ensureListingDraftFromPass(params: {
+  decisionMessage: Record<string, unknown>;
+  ref_ids: string[];
+  safeMetadata: Record<string, unknown>;
+}) {
+  const { decisionMessage, ref_ids, safeMetadata } = params;
+  const internalCode = typeof safeMetadata.internal_code === 'string' ? safeMetadata.internal_code : '';
+  if (!internalCode) return null;
+
+  // 열린 draft가 있으면 재생성하지 않음
+  const existing = await supabaseGet(
+    `hajun_messages?metadata->>entity_type=eq.listing_draft` +
+      `&metadata->>internal_code=eq.${encodeURIComponent(internalCode)}` +
+      `&metadata->>status=neq.published` +
+      `&order=created_at.desc&limit=1`
+  );
+  if (existing?._error) return null;
+  if (Array.isArray(existing) && existing.length > 0) return existing[0];
+
+  const listingRoom = await getRoomByKeys('product_listing', 'listing_queue');
+  if ('_error' in listingRoom) return null;
+
+  const decisionId = typeof decisionMessage.id === 'string' ? decisionMessage.id : '';
+  const draftRefs = Array.from(
+    new Set([decisionId, ...(Array.isArray(ref_ids) ? ref_ids : [])].filter(Boolean))
+  );
+
+  const draftSaved = await insertHajunMessage({
+    room_id: listingRoom.room.id,
+    author_type: 'ai',
+    author_name: 'HajunAI',
+    msg_type: 'work_result',
+    content: `검증 통과 → 등록대기 진입: ${internalCode}`,
+    ref_ids: draftRefs,
+    metadata: {
+      entity_type: 'listing_draft',
+      internal_code: internalCode,
+      status: 'draft',
+      title_draft: null,
+      thumbnail_status: 'pending',
+      detail_status: 'pending',
+      target_malls: [],
+      source_decision_id: decisionId || null,
+    },
+  });
+  if (draftSaved._error) return null;
+  return draftSaved.data?.[0] || null;
+}
+
 export async function POST(req: Request) {
   const { searchParams } = new URL(req.url);
   const action = searchParams.get('action');
@@ -52,7 +101,29 @@ export async function POST(req: Request) {
         ...(safeMetadata ? { metadata: safeMetadata } : {}),
       });
       if (saved._error) return Response.json({ _error: saved._error, traceId }, { status: 200 });
-      return Response.json({ payload: saved.data?.[0] || null, traceId }, { status: 200 });
+
+      const savedMessage = (saved.data?.[0] || null) as Record<string, unknown> | null;
+      let listingDraft: Record<string, unknown> | null = null;
+
+      // 검증 pass → 상품등록마당 listing_draft 자동 연결
+      if (
+        savedMessage &&
+        msg_type === 'decision' &&
+        safeMetadata?.entity_type === 'product_validation_decision' &&
+        safeMetadata?.decision === 'pass'
+      ) {
+        listingDraft = await ensureListingDraftFromPass({
+          decisionMessage: savedMessage,
+          ref_ids,
+          safeMetadata,
+        });
+      }
+
+      return Response.json({
+        payload: savedMessage,
+        listing_draft: listingDraft,
+        traceId,
+      }, { status: 200 });
     }
 
     if (action === 'ai_respond') {
@@ -114,26 +185,7 @@ export async function POST(req: Request) {
       const opportunitySection = opportunities.text
         ? `\n발견된 기회 (CoreHub Publish):\n${opportunities.text}\n이 기회들은 강요하지 말고, 대화 흐름에서 자연스럽게 언급할 것.`
         : '';
-      const systemPrompt = `당신은 HajunAI입니다. BRAINPOOL 프로젝트의 개인 전략 비서입니다.
-질문에 단순히 답하는 AI가 아니라, 프로젝트와 삶의 흐름을 이해하고
-현재 상태를 분석하여 다음에 필요한 것을 알려주는 비서입니다.
-
-규칙:
-- 핵심만 간결하게 답하세요.
-- 마크다운 금지 (**, ##, - 목록 등 사용하지 말 것).
-- 한국어로만 답하세요.
-- 제안은 하되 강요하지 않습니다. 사용자 대신 결정하지 않습니다.
-- 필요하다고 판단되면 답변 끝에 "관찰:" 섹션을 추가하세요.
-  형식: 관찰:\n- 항목1\n- 항목2${opportunitySection}
-
-현재 개발 맥락:
-${contextSummary}
-
-현재 씨앗/공간 상태 (MindWorld):
-${mindWorldSummary}
-
-HajunAI 현재 이해 (원본 Knowledge를 종합한 상태, 없으면 비어 있음):
-${understandingText || '아직 종합된 이해 없음'}`;
+      const systemPrompt = `당신은 HajunAI입니다. BRAINPOOL 프로젝트의 개인 전략 비서입니다.\n질문에 단순히 답하는 AI가 아니라, 프로젝트와 삶의 흐름을 이해하고\n현재 상태를 분석하여 다음에 필요한 것을 알려주는 비서입니다.\n\n규칙:\n- 핵심만 간결하게 답하세요.\n- 마크다운 금지 (**, ##, - 목록 등 사용하지 말 것).\n- 한국어로만 답하세요.\n- 제안은 하되 강요하지 않습니다. 사용자 대신 결정하지 않습니다.\n- 필요하다고 판단되면 답변 끝에 "관찰:" 섹션을 추가하세요.\n  형식: 관찰:\n- 항목1\n- 항목2${opportunitySection}\n\n현재 개발 맥락:\n${contextSummary}\n\n현재 씨앗/공간 상태 (MindWorld):\n${mindWorldSummary}\n\nHajunAI 현재 이해 (원본 Knowledge를 종합한 상태, 없으면 비어 있음):\n${understandingText || '아직 종합된 이해 없음'}`;
       const groqResult = await callGroq(systemPrompt, message.trim(), history);
       if (groqResult._error) {
         return Response.json({ _error: groqResult._error, traceId }, { status: 200 });
