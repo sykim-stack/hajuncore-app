@@ -12,6 +12,7 @@ import {
   callGroq,
   parseReply,
   GROQ_KEY,
+  GROQ_MODEL,
   GEMINI_KEY,
   SUPABASE_URL,
   SUPABASE_KEY,
@@ -30,7 +31,6 @@ async function ensureListingDraftFromPass(params: {
   const internalCode = typeof safeMetadata.internal_code === 'string' ? safeMetadata.internal_code : '';
   if (!internalCode) return null;
 
-  // 열린 draft가 있으면 재생성하지 않음
   const existing = await supabaseGet(
     `hajun_messages?metadata->>entity_type=eq.listing_draft` +
       `&metadata->>internal_code=eq.${encodeURIComponent(internalCode)}` +
@@ -105,7 +105,6 @@ export async function POST(req: Request) {
       const savedMessage = (saved.data?.[0] || null) as Record<string, unknown> | null;
       let listingDraft: Record<string, unknown> | null = null;
 
-      // 검증 pass → 상품등록마당 listing_draft 자동 연결
       if (
         savedMessage &&
         msg_type === 'decision' &&
@@ -143,7 +142,7 @@ export async function POST(req: Request) {
       const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
-        body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: prompt }], temperature: 0.4, max_tokens: 700 }),
+        body: JSON.stringify({ model: GROQ_MODEL, messages: [{ role: 'user', content: prompt }], temperature: 0.4, max_tokens: 700 }),
       });
       if (!aiRes.ok) return Response.json({ _error: `AI 호출 실패: ${await aiRes.text()}`, traceId }, { status: 200 });
       const aiJson = await aiRes.json();
