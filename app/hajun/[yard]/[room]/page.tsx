@@ -81,35 +81,17 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-function CopyButtons({ text, summary }: { text: string; summary?: string }) {
+/** 말풍선 1개 내용만 복사 */
+function MessageCopyButton({ text }: { text: string }) {
   const [note, setNote] = useState('');
-  const flash = (msg: string) => {
-    setNote(msg);
-    setTimeout(() => setNote(''), 1500);
-  };
   return (
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
-      {summary && (
-        <button
-          type="button"
-          onClick={async () => flash(await copyText(summary) ? '요약 복사됨' : '복사 실패')}
-          style={{ padding: '5px 9px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
-        >요약 복사</button>
-      )}
-      <button
-        type="button"
-        onClick={async () => flash(await copyText(text) ? '전체 복사됨' : '복사 실패')}
-        style={{ padding: '5px 9px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
-      >전체 복사</button>
       <button
         type="button"
         onClick={async () => {
-          const selected = window.getSelection()?.toString() || '';
-          if (!selected) {
-            flash('텍스트를 드래그해서 선택하세요');
-            return;
-          }
-          flash(await copyText(selected) ? '선택 복사됨' : '복사 실패');
+          const ok = await copyText(text);
+          setNote(ok ? '이 메시지 복사됨' : '복사 실패');
+          setTimeout(() => setNote(''), 1500);
         }}
         style={{ padding: '5px 9px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
       >선택 복사</button>
@@ -151,7 +133,7 @@ function ProductMessage({ message, duplicateCount = 1 }: { message: HajunMessage
             internal_code: <b>{meta.internal_code}</b>
           </div>
         )}
-        <CopyButtons text={message.content} summary={typeof meta.internal_code === 'string' ? `${decision} / ${meta.internal_code}` : decision} />
+        <MessageCopyButton text={message.content} />
       </div>
     );
   }
@@ -168,7 +150,7 @@ function ProductMessage({ message, duplicateCount = 1 }: { message: HajunMessage
             internal_code: <b>{meta.internal_code}</b>
           </div>
         )}
-        <CopyButtons text={message.content} summary={typeof meta.internal_code === 'string' ? `${entity} / ${meta.internal_code}` : entity} />
+        <MessageCopyButton text={message.content} />
       </div>
     );
   }
@@ -187,7 +169,7 @@ function ProductMessage({ message, duplicateCount = 1 }: { message: HajunMessage
             style={{ display: 'block', marginTop: 10, padding: '5px 9px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
           >{expanded ? '원문 접기' : '원문 전체 보기'}</button>
         )}
-        <CopyButtons text={message.content} />
+        <MessageCopyButton text={message.content} />
       </div>
     );
   }
@@ -211,10 +193,7 @@ function ProductMessage({ message, duplicateCount = 1 }: { message: HajunMessage
         style={{ display: 'block', marginTop: 10, padding: '5px 9px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
       >{expanded ? '원문 접기' : '원문 전체 보기'}</button>
       {expanded && <pre style={{ ...S.content, margin: '10px 0 0', maxHeight: 420, overflowY: 'auto', padding: 10, background: 'var(--bg3)', borderRadius: 6, whiteSpace: 'pre-wrap' }}>{message.content}</pre>}
-      <CopyButtons
-        text={message.content}
-        summary={[name, code ? `상품코드: ${code}` : '', price ? `공급가: ${price}` : ''].filter(Boolean).join('\n')}
-      />
+      <MessageCopyButton text={message.content} />
     </div>
   );
 }
@@ -238,6 +217,14 @@ export default function RoomPage() {
   const [msgType, setMsgType]   = useState<MsgType>('question');
   const [authorName, setAuthorName] = useState('여리');
   const [selectedRefs, setSelectedRefs] = useState<Set<string>>(new Set());
+  const [candidates, setCandidates] = useState<Array<{
+    id: string;
+    content: string;
+    metadata?: Record<string, unknown> | null;
+  }>>([]);
+  const [pickedCode, setPickedCode] = useState('');
+  const [pickedCandidateId, setPickedCandidateId] = useState('');
+  const [roomCopyNote, setRoomCopyNote] = useState('');
 
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -254,6 +241,24 @@ export default function RoomPage() {
     const viewRes = await fetch(`/api/hajun?action=view_room&room_id=${found.id}`);
     const viewJson = await viewRes.json();
     setMessages(viewJson.payload?.messages || []);
+
+    if (yardKey === 'product_validation' && roomKey === 'product_validation') {
+      try {
+        const candRes = await fetch('/api/hajun?action=product_candidates');
+        const candJson = await candRes.json();
+        const list = (candJson.payload?.candidates || []) as Array<{
+          id: string;
+          content: string;
+          metadata?: Record<string, unknown> | null;
+        }>;
+        setCandidates(list);
+      } catch {
+        setCandidates([]);
+      }
+    } else {
+      setCandidates([]);
+    }
+
     setLoading(false);
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'auto' }), 50);
   }, [yardKey, roomKey]);
@@ -311,9 +316,9 @@ export default function RoomPage() {
 
   const submitDecision = async (decision: DecisionValue) => {
     if (!room || posting) return;
-    const internalCode = resolveInternalCode(messages, selectedRefs);
+    const internalCode = pickedCode || resolveInternalCode(messages, selectedRefs);
     if (!internalCode) {
-      setErrMsg('참조할 상품 후보를 선택하거나, 방에 product_candidate가 있어야 합니다.');
+      setErrMsg('상품 후보를 선택하세요. (상품 선택 목록 또는 참조)');
       return;
     }
 
@@ -335,7 +340,10 @@ export default function RoomPage() {
           author_name: authorName || '검증자',
           msg_type: 'decision',
           content: `${label}: ${reason}`,
-          ref_ids: Array.from(selectedRefs),
+          ref_ids: Array.from(new Set([
+            ...Array.from(selectedRefs),
+            ...(pickedCandidateId ? [pickedCandidateId] : []),
+          ])),
           metadata: {
             entity_type: 'product_validation_decision',
             decision,
@@ -352,6 +360,8 @@ export default function RoomPage() {
       } else {
         setContent('');
         setSelectedRefs(new Set());
+        setPickedCode('');
+        setPickedCandidateId('');
         if (decision === 'pass' && json.listing_draft?.id) {
           setOkMsg(`pass 완료 → 등록대기 listing_draft 생성됨 (${json.listing_draft.id.slice(0, 8)}…)`);
         } else if (decision === 'pass') {
@@ -398,7 +408,19 @@ export default function RoomPage() {
     const code = message.metadata?.internal_code;
     return !code || all.findIndex((candidate) => candidate.metadata?.internal_code === code) === index;
   });
-  const currentCode = resolveInternalCode(messages, selectedRefs);
+  const currentCode = pickedCode || resolveInternalCode(messages, selectedRefs);
+
+  const copyWholeRoom = async () => {
+    const text = messages
+      .map((m) => {
+        const head = `[${m.msg_type}] ${m.author_name} · ${fmtTime(m.created_at)}`;
+        return `${head}\n${m.content}`;
+      })
+      .join('\n\n---\n\n');
+    const ok = await copyText(text || '(빈 방)');
+    setRoomCopyNote(ok ? '방 전체 복사됨' : '복사 실패');
+    setTimeout(() => setRoomCopyNote(''), 1500);
+  };
 
   return (
     <div style={S.page}>
@@ -412,7 +434,15 @@ export default function RoomPage() {
             <Link href={`/hajun/${yardKey}`} style={{ color: 'var(--text3)' }}>{YARD_LABEL[yardKey] || yardKey}</Link>
             {' > 방'}
           </div>
-          <div style={S.title}>{room?.name || '방'}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <div style={S.title}>{room?.name || '방'}</div>
+            <button
+              type="button"
+              onClick={copyWholeRoom}
+              style={{ padding: '5px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
+            >전체 복사</button>
+            {roomCopyNote && <span style={{ fontSize: 11, color: '#3FB950' }}>{roomCopyNote}</span>}
+          </div>
         </div>
 
         <div style={S.body} className="msg-body">
@@ -466,9 +496,35 @@ export default function RoomPage() {
             <div style={S.decisionBox}>
               <div style={S.decisionTitle}>상품 검증 결정</div>
               <div style={S.decisionHint}>
-                아래 참조에서 상품 후보를 선택한 뒤 판정하세요.
-                {currentCode ? ` · 대상: ${currentCode}` : ' · 대상 internal_code 미선택'}
+                상품 후보를 선택한 뒤 판정하세요.
+                {currentCode ? ` · 대상: ${currentCode}` : ' · 대상 미선택'}
               </div>
+              <select
+                style={{ ...S.select, width: '100%', marginBottom: 10 }}
+                value={pickedCandidateId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setPickedCandidateId(id);
+                  const found = candidates.find((c) => c.id === id);
+                  const code = typeof found?.metadata?.internal_code === 'string'
+                    ? found.metadata.internal_code
+                    : '';
+                  setPickedCode(code);
+                }}
+              >
+                <option value="">상품 후보 선택...</option>
+                {candidates.map((c) => {
+                  const code = typeof c.metadata?.internal_code === 'string' ? c.metadata.internal_code : '';
+                  const name = typeof c.metadata?.name === 'string'
+                    ? c.metadata.name
+                    : (c.content.split('\n')[0] || code || c.id).slice(0, 40);
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {(code || '코드없음').replace(/^onchannel:/, '')} · {name}
+                    </option>
+                  );
+                })}
+              </select>
               <div style={S.btnRow}>
                 <button
                   type="button"
