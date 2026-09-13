@@ -114,7 +114,7 @@ function resolveInternalCode(messages: HajunMessage[], selectedRefs: Set<string>
   return '';
 }
 
-function ProductMessage({ message, duplicateCount = 1 }: { message: HajunMessage; duplicateCount?: number }) {
+function ProductMessage({ message, duplicateCount = 1, onSelectForValidation }: { message: HajunMessage; duplicateCount?: number; onSelectForValidation?: (message: HajunMessage) => void }) {
   const [expanded, setExpanded] = useState(false);
   const meta = message.metadata || {};
   const entity = String(meta.entity_type || '');
@@ -193,6 +193,15 @@ function ProductMessage({ message, duplicateCount = 1 }: { message: HajunMessage
         style={{ display: 'block', marginTop: 10, padding: '5px 9px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
       >{expanded ? '원문 접기' : '원문 전체 보기'}</button>
       {expanded && <pre style={{ ...S.content, margin: '10px 0 0', maxHeight: 420, overflowY: 'auto', padding: 10, background: 'var(--bg3)', borderRadius: 6, whiteSpace: 'pre-wrap' }}>{message.content}</pre>}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
+        {onSelectForValidation && (
+          <button
+            type="button"
+            onClick={() => onSelectForValidation(message)}
+            style={{ padding: '6px 12px', border: 'none', borderRadius: 6, background: '#3FB950', color: '#0D1117', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
+          >검증 선택</button>
+        )}
+      </div>
       <MessageCopyButton text={message.content} />
     </div>
   );
@@ -204,6 +213,7 @@ export default function RoomPage() {
   const roomKey = params.room as string;
 
   const isValidationRoom = yardKey === 'product_validation' && roomKey === 'product_validation';
+  const isDiscoveryRoom = yardKey === 'product_validation' && roomKey === 'product_discovery';
 
   const [room, setRoom]         = useState<HajunRoom | null>(null);
   const [messages, setMessages] = useState<HajunMessage[]>([]);
@@ -225,6 +235,8 @@ export default function RoomPage() {
   const [pickedCode, setPickedCode] = useState('');
   const [pickedCandidateId, setPickedCandidateId] = useState('');
   const [roomCopyNote, setRoomCopyNote] = useState('');
+  const [candidateError, setCandidateError] = useState('');
+  const [candidateCount, setCandidateCount] = useState(0);
 
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -242,21 +254,49 @@ export default function RoomPage() {
     const viewJson = await viewRes.json();
     setMessages(viewJson.payload?.messages || []);
 
-    if (yardKey === 'product_validation' && roomKey === 'product_validation') {
+    // 상품 후보는 검증마당 어느 방에서든 쓸 수 있게 로드
+    if (yardKey === 'product_validation') {
       try {
         const candRes = await fetch('/api/hajun?action=product_candidates');
         const candJson = await candRes.json();
-        const list = (candJson.payload?.candidates || []) as Array<{
-          id: string;
-          content: string;
-          metadata?: Record<string, unknown> | null;
-        }>;
-        setCandidates(list);
-      } catch {
+        if (candJson._error) {
+          setCandidateError(String(candJson._error));
+          setCandidates([]);
+          setCandidateCount(0);
+        } else {
+          const list = (candJson.payload?.candidates || []) as Array<{
+            id: string;
+            content: string;
+            metadata?: Record<string, unknown> | null;
+          }>;
+          setCandidates(list);
+          setCandidateCount(list.length);
+          setCandidateError(list.length ? '' : '등록된 상품 후보가 없습니다. 상품발굴방에서 캡처가 필요합니다.');
+        }
+      } catch (e) {
         setCandidates([]);
+        setCandidateCount(0);
+        setCandidateError(e instanceof Error ? e.message : '상품 후보 조회 실패');
       }
     } else {
       setCandidates([]);
+      setCandidateCount(0);
+      setCandidateError('');
+    }
+
+    // 발굴방에서 검증 선택으로 넘어온 경우 복원
+    if (yardKey === 'product_validation' && roomKey === 'product_validation') {
+      try {
+        const raw = sessionStorage.getItem('hajun_validation_pick');
+        if (raw) {
+          const pick = JSON.parse(raw) as { id?: string; internal_code?: string };
+          if (pick.id) setPickedCandidateId(pick.id);
+          if (pick.internal_code) setPickedCode(pick.internal_code);
+          sessionStorage.removeItem('hajun_validation_pick');
+        }
+      } catch {
+        // ignore
+      }
     }
 
     setLoading(false);
@@ -410,6 +450,24 @@ export default function RoomPage() {
   });
   const currentCode = pickedCode || resolveInternalCode(messages, selectedRefs);
 
+  const selectForValidation = (message: HajunMessage) => {
+    const code = typeof message.metadata?.internal_code === 'string' ? message.metadata.internal_code : '';
+    if (!code) {
+      setErrMsg('이 메시지에 internal_code가 없어 검증 대상으로 선택할 수 없습니다.');
+      return;
+    }
+    try {
+      sessionStorage.setItem('hajun_validation_pick', JSON.stringify({
+        id: message.id,
+        internal_code: code,
+      }));
+    } catch {
+      // ignore
+    }
+    // 검증방으로 이동
+    window.location.href = '/hajun/product_validation/product_validation';
+  };
+
   const copyWholeRoom = async () => {
     const text = messages
       .map((m) => {
@@ -467,6 +525,7 @@ export default function RoomPage() {
                 duplicateCount={m.metadata?.internal_code
                   ? messages.filter((candidate) => candidate.metadata?.internal_code === m.metadata?.internal_code).length
                   : 1}
+                onSelectForValidation={isDiscoveryRoom ? selectForValidation : undefined}
               />
               {m.ref_ids.length > 0 && (
                 <div style={S.refRow}>
@@ -496,11 +555,15 @@ export default function RoomPage() {
             <div style={S.decisionBox}>
               <div style={S.decisionTitle}>상품 검증 결정</div>
               <div style={S.decisionHint}>
-                상품 후보를 선택한 뒤 판정하세요.
+                상품발굴방에서 <b>검증 선택</b> 하거나, 아래에서 후보를 고르세요.
                 {currentCode ? ` · 대상: ${currentCode}` : ' · 대상 미선택'}
+                {` · 후보 ${candidateCount}개`}
               </div>
+              {candidateError && (
+                <div style={{ ...S.errMsg, marginBottom: 8 }}>⚠ {candidateError}</div>
+              )}
               <select
-                style={{ ...S.select, width: '100%', marginBottom: 10 }}
+                style={{ ...S.select, width: '100%', marginBottom: 10, minHeight: 36 }}
                 value={pickedCandidateId}
                 onChange={(e) => {
                   const id = e.target.value;
