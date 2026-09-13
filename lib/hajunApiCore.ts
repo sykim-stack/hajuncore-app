@@ -6,8 +6,12 @@ export const SUPABASE_URL = process.env.SUPABASE_URL!;
 export const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
 export const GEMINI_KEY  = process.env.GEMINI_API_KEY!;
 export const GROQ_KEY    = process.env.GROQ_API_KEY!;
-/** 선택. 비어 있으면 Groq 후보 목록 → 실패 시 Gemini 폴백 */
+/** 선택. 비어 있으면 Groq 후보 목록 시도 */
 export const GROQ_MODEL  = process.env.GROQ_MODEL || '';
+/** 관제·개발 마당과 동일 계열 — NVIDIA NIM (OpenAI 호환) */
+export const NVIDIA_KEY   = process.env.NVIDIA_API_KEY || process.env.NIM_API_KEY || '';
+export const NVIDIA_MODEL = process.env.NVIDIA_MODEL || 'meta/llama-3.1-8b-instruct';
+export const NVIDIA_BASE  = process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1';
 export const HOUSE_ID    = '6341b872-4555-4fdc-8f1d-8009b2b1764f';
 export const COREHUB_URL = process.env.COREHUB_URL || 'https://brainpool-corehub.vercel.app';
 
@@ -229,7 +233,7 @@ async function callGeminiChat(
   userMessage: string,
   history: Array<{ role: string; content: string }>
 ): Promise<{ text?: string; _error?: string }> {
-  if (!GEMINI_KEY) return { _error: 'GEMINI_API_KEY 미설정 (Groq도 사용 불가)' };
+  if (!GEMINI_KEY) return { _error: 'GEMINI_API_KEY 미설정 (다른 제공자도 사용 불가)' };
 
   const contents: Array<{ role: string; parts: Array<{ text: string }> }> = [];
   for (const h of history) {
@@ -291,7 +295,32 @@ async function callGroqOnce(
   return { text };
 }
 
-/** Groq 후보 시도 → 전부 실패 시 Gemini 폴백 (synthesize와 동일 키) */
+async function callNvidiaChat(
+  messages: Array<{ role: string; content: string }>
+): Promise<{ text?: string; _error?: string }> {
+  if (!NVIDIA_KEY) return { _error: 'NVIDIA_API_KEY 미설정' };
+  const res = await fetch(`${NVIDIA_BASE.replace(/\/$/, '')}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${NVIDIA_KEY}`,
+    },
+    body: JSON.stringify({
+      model: NVIDIA_MODEL,
+      messages,
+      temperature: 0.4,
+      max_tokens: 1024,
+      stream: false,
+    }),
+  });
+  if (!res.ok) return { _error: `NVIDIA(${NVIDIA_MODEL}): ${await res.text()}` };
+  const data = await res.json();
+  const text = data.choices?.[0]?.message?.content || '';
+  if (!text) return { _error: 'NVIDIA 빈 응답' };
+  return { text };
+}
+
+/** 우선순위: NVIDIA(관제·개발 동일) → Groq → Gemini */
 export async function callGroq(
   systemPrompt: string,
   userMessage: string,
@@ -304,6 +333,13 @@ export async function callGroq(
   ];
 
   const errors: string[] = [];
+
+  if (NVIDIA_KEY) {
+    const nv = await callNvidiaChat(messages);
+    if (nv.text) return { text: nv.text };
+    if (nv._error) errors.push(nv._error);
+  }
+
   if (GROQ_KEY) {
     const tried = new Set<string>();
     for (const model of GROQ_MODEL_CANDIDATES) {
@@ -313,15 +349,14 @@ export async function callGroq(
       if (result.text) return { text: result.text };
       if (result._error) errors.push(result._error);
     }
-  } else {
-    errors.push('GROQ_API_KEY 미설정');
   }
 
   const gemini = await callGeminiChat(systemPrompt, userMessage, history);
   if (gemini.text) return { text: gemini.text };
+  if (gemini._error) errors.push(gemini._error);
 
   return {
-    _error: `채팅 모델 전부 실패. Groq: ${errors.slice(0, 2).join(' | ')} / Gemini: ${gemini._error || '없음'}`,
+    _error: `채팅 모델 전부 실패: ${errors.slice(0, 3).join(' | ')}`,
   };
 }
 
