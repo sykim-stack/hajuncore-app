@@ -6,6 +6,8 @@ export const SUPABASE_URL = process.env.SUPABASE_URL!;
 export const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
 export const GEMINI_KEY  = process.env.GEMINI_API_KEY!;
 export const GROQ_KEY    = process.env.GROQ_API_KEY!;
+/** 기본: 개발 키에서 접근 가능한 instant. 70b는 플랜 제한 시 model_not_found */
+export const GROQ_MODEL  = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
 export const HOUSE_ID    = '6341b872-4555-4fdc-8f1d-8009b2b1764f';
 export const COREHUB_URL = process.env.COREHUB_URL || 'https://brainpool-corehub.vercel.app';
 
@@ -24,10 +26,10 @@ export async function getRoomsByYardId(yardId: string) {
 
 export async function getRoomByKeys(yardKey: string, roomKey: string) {
   const yard = await getYardByKey(yardKey);
-  if (!yard) return { _error: `\ub9c8\ub2f9\uc744 \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4: ${yardKey}` };
+  if (!yard) return { _error: `마당을 찾을 수 없습니다: ${yardKey}` };
   const rooms = await getRoomsByYardId(yard.id);
   const room = (rooms || []).find((item: { key?: string }) => item.key === roomKey);
-  if (!room) return { _error: `\ubc29\uc744 \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4: ${yardKey}/${roomKey}` };
+  if (!room) return { _error: `방을 찾을 수 없습니다: ${yardKey}/${roomKey}` };
   return { yard, room };
 }
 
@@ -64,7 +66,7 @@ export async function insertHajunMessage(body: Record<string, unknown>) {
       },
       body: JSON.stringify(body),
     });
-    if (!res.ok) return { _error: `\uba54\uc2dc\uc9c0 \uc800\uc7a5 \uc2e4\ud328: ${await res.text()}` };
+    if (!res.ok) return { _error: `메시지 저장 실패: ${await res.text()}` };
     return { data: await res.json() };
   } catch (e) {
     return { _error: e instanceof Error ? e.message : String(e) };
@@ -77,15 +79,15 @@ export function buildSnapshotSummary(content: Record<string, unknown>): string {
   const rooms   = (content?.rooms   || []) as Array<Record<string, unknown>>;
   const parts: string[] = [];
   if (house.title) parts.push(`${house.title} (${house.primary_language || ''})`);
-  if (summary.seed_rooms   > 0) parts.push(`\uc528\uc557\ubc29 ${summary.seed_rooms}\uac1c`);
-  if (summary.bloomed_seeds > 0) parts.push(`\uaf43 ${summary.bloomed_seeds}\uac1c`);
-  if (summary.total_fruits  > 0) parts.push(`\uc5f4\ub9e4 ${summary.total_fruits}\uac1c`);
-  if (summary.total_harvested > 0) parts.push(`\uc218\ud655 ${summary.total_harvested}\uac1c`);
-  parts.push(`\uba54\uc2dc\uc9c0 ${summary.total_messages || 0}\uac1c`);
+  if (summary.seed_rooms   > 0) parts.push(`씨앗방 ${summary.seed_rooms}개`);
+  if (summary.bloomed_seeds > 0) parts.push(`꽃 ${summary.bloomed_seeds}개`);
+  if (summary.total_fruits  > 0) parts.push(`열매 ${summary.total_fruits}개`);
+  if (summary.total_harvested > 0) parts.push(`수확 ${summary.total_harvested}개`);
+  parts.push(`메시지 ${summary.total_messages || 0}개`);
   const seedRooms = rooms.filter(r => r.seed_mode);
   if (seedRooms.length > 0)
-    parts.push(`\uc528\uc557: ${seedRooms.map(r => r.room_name).join(', ')}`);
-  return parts.join(' \u00b7 ');
+    parts.push(`씨앗: ${seedRooms.map(r => r.room_name).join(', ')}`);
+  return parts.join(' · ');
 }
 
 export function buildSnapshotKeywords(content: Record<string, unknown>): string[] {
@@ -123,16 +125,16 @@ export async function fetchMindWorldSummary(): Promise<string> {
       `${SUPABASE_URL}/rest/v1/corenull_rooms?house_id=eq.${HOUSE_ID}&order=updated_at.desc&limit=5`,
       { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, cache: 'no-store' }
     );
-    if (!res.ok) return '\uc528\uc557 \ub370\uc774\ud130 \uc5c6\uc74c';
+    if (!res.ok) return '씨앗 데이터 없음';
     const rooms = await res.json();
-    if (!rooms || rooms.length === 0) return '\uc528\uc557 \ub370\uc774\ud130 \uc5c6\uc74c';
+    if (!rooms || rooms.length === 0) return '씨앗 데이터 없음';
     return rooms
       .map((r: { name?: string; fruit_state?: string; updated_at?: string }) =>
-        `- ${r.name || '\uc774\ub984\uc5c6\uc74c'} (${r.fruit_state || 'unknown'}) | ${r.updated_at?.slice(0, 10) || ''}`
+        `- ${r.name || '이름없음'} (${r.fruit_state || 'unknown'}) | ${r.updated_at?.slice(0, 10) || ''}`
       )
       .join('\n');
   } catch {
-    return '\uc528\uc557 \ub370\uc774\ud130 \uc870\ud68c \uc2e4\ud328';
+    return '씨앗 데이터 조회 실패';
   }
 }
 
@@ -151,7 +153,7 @@ export async function fetchOpportunities(ownerKey: string): Promise<{ text: stri
     const ids = top.map((o: { id: string }) => o.id);
     const text = top
       .map((o: { title?: string; description?: string; opportunity_type?: string }) =>
-        `- ${o.title || o.description || '\ubc1c\uacac\ub41c \uae30\ud68c'} (${o.opportunity_type || 'opportunity'})`
+        `- ${o.title || o.description || '발견된 기회'} (${o.opportunity_type || 'opportunity'})`
       )
       .join('\n');
     return { text, ids };
@@ -176,21 +178,21 @@ export async function consumeOpportunities(ids: string[], outcome = 'shown'): Pr
 export async function fetchContextSummary(): Promise<string> {
   try {
     const data = await supabaseGet('dev_contexts?order=updated_at.desc&limit=1');
-    if (!data || data.length === 0) return '\uac1c\ubc1c \ub9e5\ub77d \uc5c6\uc74c';
+    if (!data || data.length === 0) return '개발 맥락 없음';
     const c = data[0];
     const parts: string[] = [];
-    if (c.phase)          parts.push(`\ud398\uc774\uc988: ${c.phase}`);
-    if (c.status)         parts.push(`\uc0c1\ud0dc: ${c.status}`);
-    if (c.last_task)      parts.push(`\ub9c8\uc9c0\ub9c9 \uc791\uc5c5: ${c.last_task}`);
-    if (c.next_action)    parts.push(`\ub2e4\uc74c \uc561\uc158: ${c.next_action}`);
-    if (c.current_problems && c.current_problems !== '\uc5c6\uc74c')
-                          parts.push(`\ud604\uc7ac \ubb38\uc81c: ${c.current_problems}`);
-    if (c.summary)        parts.push(`\uc694\uc57d: ${c.summary}`);
+    if (c.phase)          parts.push(`페이즈: ${c.phase}`);
+    if (c.status)         parts.push(`상태: ${c.status}`);
+    if (c.last_task)      parts.push(`마지막 작업: ${c.last_task}`);
+    if (c.next_action)    parts.push(`다음 액션: ${c.next_action}`);
+    if (c.current_problems && c.current_problems !== '없음')
+                          parts.push(`현재 문제: ${c.current_problems}`);
+    if (c.summary)        parts.push(`요약: ${c.summary}`);
     if (Array.isArray(c.next_tasks) && c.next_tasks.length > 0)
-      parts.push(`\ub2e4\uc74c \uc791\uc5c5:\n${c.next_tasks.map((t: string) => `  - ${t}`).join('\n')}`);
-    return parts.join('\n') || '\ub9e5\ub77d \ub370\uc774\ud130 \ud30c\uc2f1 \uc2e4\ud328';
+      parts.push(`다음 작업:\n${c.next_tasks.map((t: string) => `  - ${t}`).join('\n')}`);
+    return parts.join('\n') || '맥락 데이터 파싱 실패';
   } catch {
-    return '\uac1c\ubc1c \ub9e5\ub77d \uc870\ud68c \uc2e4\ud328';
+    return '개발 맥락 조회 실패';
   }
 }
 
@@ -232,7 +234,7 @@ export async function callGroq(
       Authorization: `Bearer ${GROQ_KEY}`,
     },
     body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      model: GROQ_MODEL,
       messages,
       temperature: 0.4,
       max_tokens: 1024,
@@ -240,7 +242,7 @@ export async function callGroq(
   });
   if (!res.ok) {
     const errText = await res.text();
-    return { _error: `Groq API \uc624\ub958: ${errText}` };
+    return { _error: `Groq API 오류: ${errText}` };
   }
   const data = await res.json();
   const text = data.choices?.[0]?.message?.content || '';
@@ -248,7 +250,7 @@ export async function callGroq(
 }
 
 export function parseReply(raw: string): { reply: string; observations: string[] } {
-  const obsMarkers = ['\uad00\ucc30:', '\uad00\ucc30 :', 'Observations:', '\uad00\ucc30\uc0ac\ud56d:'];
+  const obsMarkers = ['관찰:', '관찰 :', 'Observations:', '관찰사항:'];
   let splitIdx = -1;
   let marker = '';
   for (const m of obsMarkers) {
