@@ -47,6 +47,41 @@ export async function GET(req: Request) {
       return Response.json({ payload: { internal_code: internalCode, messages: messages || [], source: 'hajun_messages' }, traceId: createTraceId() });
     }
 
+    // 상품등록마당: 열린 listing_draft 대기열
+    if (action === 'listing_queue') {
+      const path =
+        'hajun_messages?metadata->>entity_type=eq.listing_draft' +
+        '&metadata->>status=neq.published&order=created_at.desc';
+      const messages = await supabaseGet(path);
+      if (messages?._error) {
+        return Response.json({ _error: messages._error, traceId: createTraceId() }, { status: 200 });
+      }
+      return Response.json({
+        payload: { items: messages || [], count: (messages || []).length, source: 'hajun_messages' },
+        traceId: createTraceId(),
+      });
+    }
+
+    // 상품등록마당: internal_code 기준 listing 이력
+    if (action === 'listing_timeline') {
+      const internalCode = searchParams.get('internal_code');
+      if (!internalCode) {
+        return Response.json({ _error: 'internal_code 필요', traceId: createTraceId() }, { status: 200 });
+      }
+      const path =
+        `hajun_messages?metadata->>internal_code=eq.${encodeURIComponent(internalCode)}` +
+        `&metadata->>entity_type=in.(listing_draft,listing_content,listing_published)` +
+        `&order=created_at.asc`;
+      const messages = await supabaseGet(path);
+      if (messages?._error) {
+        return Response.json({ _error: messages._error, traceId: createTraceId() }, { status: 200 });
+      }
+      return Response.json({
+        payload: { internal_code: internalCode, messages: messages || [], source: 'hajun_messages' },
+        traceId: createTraceId(),
+      });
+    }
+
     if (action === 'room_list') {
       const yardKey = searchParams.get('yard');
       if (!yardKey) return Response.json({ _error: 'yard 파라미터 필요' }, { status: 200 });
