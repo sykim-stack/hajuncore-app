@@ -107,14 +107,30 @@ function resolveInternalCode(messages: HajunMessage[], selectedRefs: Set<string>
     if (typeof code === 'string' && code) return code;
   }
   for (const m of messages) {
-    if (m.metadata?.entity_type === 'product_candidate' && typeof m.metadata?.internal_code === 'string') {
-      return m.metadata.internal_code;
+    const entity = m.metadata?.entity_type;
+    const code = m.metadata?.internal_code;
+    if (
+      typeof code === 'string' &&
+      code &&
+      (entity === 'product_candidate' ||
+        entity === 'listing_draft' ||
+        entity === 'listing_content' ||
+        entity === 'listing_published' ||
+        entity === 'product_validation_decision')
+    ) {
+      return code;
     }
   }
   return '';
 }
 
-function ProductMessage({ message, duplicateCount = 1, onSelectForValidation }: { message: HajunMessage; duplicateCount?: number; onSelectForValidation?: (message: HajunMessage) => void }) {
+function ProductMessage({ message, duplicateCount = 1, onSelectForValidation, onStartContent, onPublish }: {
+  message: HajunMessage;
+  duplicateCount?: number;
+  onSelectForValidation?: (message: HajunMessage) => void;
+  onStartContent?: (message: HajunMessage) => void;
+  onPublish?: (message: HajunMessage) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const meta = message.metadata || {};
   const entity = String(meta.entity_type || '');
@@ -139,10 +155,12 @@ function ProductMessage({ message, duplicateCount = 1, onSelectForValidation }: 
   }
 
   if (entity === 'listing_draft' || entity === 'listing_content' || entity === 'listing_published') {
+    const status = String(meta.status || '');
+    const title = typeof meta.title_draft === 'string' ? meta.title_draft : '';
     return (
       <div>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
-          {entity} · {String(meta.status || '')}
+          {entity} · {status}
         </div>
         <div style={S.content}>{message.content}</div>
         {typeof meta.internal_code === 'string' && (
@@ -150,6 +168,27 @@ function ProductMessage({ message, duplicateCount = 1, onSelectForValidation }: 
             internal_code: <b>{meta.internal_code}</b>
           </div>
         )}
+        {title && (
+          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text2)' }}>
+            상품명 초안: <b>{title}</b>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+          {entity === 'listing_draft' && onStartContent && status !== 'published' && (
+            <button
+              type="button"
+              onClick={() => onStartContent(message)}
+              style={{ padding: '6px 12px', border: 'none', borderRadius: 6, background: '#58A6FF', color: '#0D1117', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
+            >콘텐츠 시작</button>
+          )}
+          {entity === 'listing_content' && onPublish && status !== 'published' && (
+            <button
+              type="button"
+              onClick={() => onPublish(message)}
+              style={{ padding: '6px 12px', border: 'none', borderRadius: 6, background: '#3FB950', color: '#0D1117', cursor: 'pointer', fontSize: 12, fontWeight: 700 }}
+            >게시 완료</button>
+          )}
+        </div>
         <MessageCopyButton text={message.content} />
       </div>
     );
@@ -214,6 +253,8 @@ export default function RoomPage() {
 
   const isValidationRoom = yardKey === 'product_validation' && roomKey === 'product_validation';
   const isDiscoveryRoom = yardKey === 'product_validation' && roomKey === 'product_discovery';
+  const isListingQueueRoom = yardKey === 'product_listing' && roomKey === 'listing_queue';
+  const isListingContentRoom = yardKey === 'product_listing' && roomKey === 'listing_content';
 
   const [room, setRoom]         = useState<HajunRoom | null>(null);
   const [messages, setMessages] = useState<HajunMessage[]>([]);
@@ -237,6 +278,7 @@ export default function RoomPage() {
   const [roomCopyNote, setRoomCopyNote] = useState('');
   const [candidateError, setCandidateError] = useState('');
   const [candidateCount, setCandidateCount] = useState(0);
+  const [titleDraft, setTitleDraft] = useState('');
 
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -254,7 +296,6 @@ export default function RoomPage() {
     const viewJson = await viewRes.json();
     setMessages(viewJson.payload?.messages || []);
 
-    // 상품 후보는 검증마당 어느 방에서든 쓸 수 있게 로드
     if (yardKey === 'product_validation') {
       try {
         const candRes = await fetch('/api/hajun?action=product_candidates');
@@ -284,7 +325,6 @@ export default function RoomPage() {
       setCandidateError('');
     }
 
-    // 발굴방에서 검증 선택으로 넘어온 경우 복원
     if (yardKey === 'product_validation' && roomKey === 'product_validation') {
       try {
         const raw = sessionStorage.getItem('hajun_validation_pick');
@@ -464,8 +504,153 @@ export default function RoomPage() {
     } catch {
       // ignore
     }
-    // 검증방으로 이동
     window.location.href = '/hajun/product_validation/product_validation';
+  };
+
+  const startContent = async (message: HajunMessage) => {
+    if (posting) return;
+    const code = typeof message.metadata?.internal_code === 'string' ? message.metadata.internal_code : '';
+    if (!code) {
+      setErrMsg('listing_draft에 internal_code가 없습니다.');
+      return;
+    }
+    setPosting(true);
+    setErrMsg('');
+    setOkMsg('');
+    try {
+      const res = await fetch('/api/hajun?action=post_message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          yard_key: 'product_listing',
+          room_key: 'listing_content',
+          author_type: 'human',
+          author_name: authorName || '콘텐츠작업',
+          msg_type: 'work_result',
+          content: `콘텐츠 작업 시작: ${code}`,
+          ref_ids: Array.from(new Set([message.id, ...(message.ref_ids || [])])),
+          metadata: {
+            entity_type: 'listing_content',
+            internal_code: code,
+            status: 'editing',
+            title_draft: titleDraft || null,
+            thumbnail_status: 'pending',
+            detail_status: 'pending',
+            target_malls: [],
+            source_draft_id: message.id,
+          },
+        }),
+      });
+      const json = await res.json();
+      if (json._error) {
+        setErrMsg(json._error);
+      } else {
+        setOkMsg('콘텐츠제작방으로 이동했습니다.');
+        window.location.href = '/hajun/product_listing/listing_content';
+      }
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  const publishListing = async (message: HajunMessage) => {
+    if (posting) return;
+    const code = typeof message.metadata?.internal_code === 'string' ? message.metadata.internal_code : '';
+    if (!code) {
+      setErrMsg('listing_content에 internal_code가 없습니다.');
+      return;
+    }
+    setPosting(true);
+    setErrMsg('');
+    setOkMsg('');
+    try {
+      const res = await fetch('/api/hajun?action=post_message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          yard_key: 'product_listing',
+          room_key: 'listing_published',
+          author_type: 'human',
+          author_name: authorName || '게시확인',
+          msg_type: 'decision',
+          content: `쇼핑몰 게시 완료 확인: ${code}${titleDraft ? ` / ${titleDraft}` : ''}`,
+          ref_ids: Array.from(new Set([message.id, ...(message.ref_ids || [])])),
+          metadata: {
+            entity_type: 'listing_published',
+            internal_code: code,
+            status: 'published',
+            title_draft: titleDraft || message.metadata?.title_draft || null,
+            thumbnail_status: message.metadata?.thumbnail_status || 'done',
+            detail_status: message.metadata?.detail_status || 'done',
+            target_malls: message.metadata?.target_malls || [],
+            source_content_id: message.id,
+            published_at: new Date().toISOString(),
+            published_by: 'human',
+          },
+        }),
+      });
+      const json = await res.json();
+      if (json._error) {
+        setErrMsg(json._error);
+      } else {
+        setOkMsg('등록완료방에 published 기록이 생성되었습니다.');
+        window.location.href = '/hajun/product_listing/listing_published';
+      }
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  const saveContentNote = async () => {
+    if (!room || posting || !isListingContentRoom) return;
+    const code = pickedCode || resolveInternalCode(messages, selectedRefs);
+    if (!code) {
+      setErrMsg('작업할 상품 internal_code를 선택하세요.');
+      return;
+    }
+    const note = content.trim();
+    if (!note && !titleDraft.trim()) {
+      setErrMsg('상품명 초안 또는 작업 메모를 입력하세요.');
+      return;
+    }
+    setPosting(true);
+    setErrMsg('');
+    setOkMsg('');
+    try {
+      const res = await fetch('/api/hajun?action=post_message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          room_id: room.id,
+          author_type: 'human',
+          author_name: authorName || '콘텐츠작업',
+          msg_type: 'work_result',
+          content: note || `상품명 초안 저장: ${titleDraft}`,
+          ref_ids: Array.from(new Set([
+            ...Array.from(selectedRefs),
+            ...(pickedCandidateId ? [pickedCandidateId] : []),
+          ])),
+          metadata: {
+            entity_type: 'listing_content',
+            internal_code: code,
+            status: 'editing',
+            title_draft: titleDraft || null,
+            thumbnail_status: 'pending',
+            detail_status: 'pending',
+            target_malls: [],
+          },
+        }),
+      });
+      const json = await res.json();
+      if (json._error) setErrMsg(json._error);
+      else {
+        setContent('');
+        setOkMsg('콘텐츠 작업 기록이 저장되었습니다.');
+        await load();
+      }
+    } finally {
+      setPosting(false);
+    }
   };
 
   const copyWholeRoom = async () => {
@@ -526,6 +711,8 @@ export default function RoomPage() {
                   ? messages.filter((candidate) => candidate.metadata?.internal_code === m.metadata?.internal_code).length
                   : 1}
                 onSelectForValidation={isDiscoveryRoom ? selectForValidation : undefined}
+                onStartContent={isListingQueueRoom ? startContent : undefined}
+                onPublish={isListingContentRoom ? publishListing : undefined}
               />
               {m.ref_ids.length > 0 && (
                 <div style={S.refRow}>
@@ -551,6 +738,46 @@ export default function RoomPage() {
         </div>
 
         <div style={S.compose}>
+          {isListingQueueRoom && (
+            <div style={S.decisionBox}>
+              <div style={S.decisionTitle}>등록대기 → 콘텐츠</div>
+              <div style={S.decisionHint}>
+                listing_draft 카드의 <b>콘텐츠 시작</b>을 누르면 콘텐츠제작방으로 넘어갑니다.
+                상품명 초안을 미리 적어두면 함께 전달됩니다.
+              </div>
+              <input
+                style={{ ...S.input, width: '100%', marginBottom: 8 }}
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                placeholder="상품명 초안 (선택)"
+              />
+            </div>
+          )}
+
+          {isListingContentRoom && (
+            <div style={S.decisionBox}>
+              <div style={S.decisionTitle}>콘텐츠 작업</div>
+              <div style={S.decisionHint}>
+                상품명·섬네일·상세 작업 메모를 남기고, 쇼핑몰 반영 후 <b>게시 완료</b>를 누르세요.
+                자동 게시하지 않습니다.
+              </div>
+              <input
+                style={{ ...S.input, width: '100%', marginBottom: 8 }}
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                placeholder="상품명 초안"
+              />
+              <div style={S.btnRow}>
+                <button
+                  type="button"
+                  style={{ ...S.submitBtn, background: '#58A6FF', ...(posting ? S.submitOff : {}) }}
+                  disabled={posting}
+                  onClick={saveContentNote}
+                >작업 기록 저장</button>
+              </div>
+            </div>
+          )}
+
           {isValidationRoom && (
             <div style={S.decisionBox}>
               <div style={S.decisionTitle}>상품 검증 결정</div>
