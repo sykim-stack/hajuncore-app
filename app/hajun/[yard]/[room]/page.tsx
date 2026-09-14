@@ -279,6 +279,7 @@ export default function RoomPage() {
   const [candidateError, setCandidateError] = useState('');
   const [candidateCount, setCandidateCount] = useState(0);
   const [titleDraft, setTitleDraft] = useState('');
+  const [yardRooms, setYardRooms] = useState<HajunRoom[]>([]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -286,7 +287,9 @@ export default function RoomPage() {
     setLoading(true);
     const listRes = await fetch(`/api/hajun?action=room_list&yard=${yardKey}`);
     const listJson = await listRes.json();
-    const found: HajunRoom | undefined = listJson.payload?.rooms?.find(
+    const rooms: HajunRoom[] = listJson.payload?.rooms || [];
+    setYardRooms(rooms);
+    const found: HajunRoom | undefined = rooms.find(
       (r: HajunRoom) => r.key === roomKey
     );
     if (!found) { setLoading(false); return; }
@@ -294,7 +297,19 @@ export default function RoomPage() {
 
     const viewRes = await fetch(`/api/hajun?action=view_room&room_id=${found.id}`);
     const viewJson = await viewRes.json();
-    setMessages(viewJson.payload?.messages || []);
+    const loadedMessages: HajunMessage[] = viewJson.payload?.messages || [];
+    setMessages(loadedMessages);
+
+    // 콘텐츠방: 최근 listing_content의 상품명 초안 복원
+    if (yardKey === 'product_listing' && roomKey === 'listing_content') {
+      const latestContent = [...loadedMessages].reverse().find(
+        (m) => m.metadata?.entity_type === 'listing_content'
+      );
+      const prevTitle = latestContent?.metadata?.title_draft;
+      if (typeof prevTitle === 'string' && prevTitle) {
+        setTitleDraft(prevTitle);
+      }
+    }
 
     if (yardKey === 'product_validation') {
       try {
@@ -603,16 +618,33 @@ export default function RoomPage() {
 
   const saveContentNote = async () => {
     if (!room || posting || !isListingContentRoom) return;
-    const code = pickedCode || resolveInternalCode(messages, selectedRefs);
+    // 방 안 listing_content / draft 계보에서 자동 추출 (참조 선택 불필요)
+    const code =
+      pickedCode ||
+      resolveInternalCode(messages, selectedRefs) ||
+      (() => {
+        const latest = [...messages].reverse().find((m) => {
+          const e = m.metadata?.entity_type;
+          return e === 'listing_content' || e === 'listing_draft';
+        });
+        return typeof latest?.metadata?.internal_code === 'string'
+          ? latest.metadata.internal_code
+          : '';
+      })();
     if (!code) {
-      setErrMsg('작업할 상품 internal_code를 선택하세요.');
+      setErrMsg('이 방에 연결된 상품 코드가 없습니다. 등록대기에서 콘텐츠 시작을 다시 해주세요.');
       return;
     }
     const note = content.trim();
-    if (!note && !titleDraft.trim()) {
-      setErrMsg('상품명 초안 또는 작업 메모를 입력하세요.');
+    const title = titleDraft.trim();
+    if (!note && !title) {
+      setErrMsg('상품명 초안 또는 작업 메모 중 하나는 입력하세요.');
       return;
     }
+    // 최근 listing_content를 ref에 연결
+    const latestContent = [...messages].reverse().find(
+      (m) => m.metadata?.entity_type === 'listing_content'
+    );
     setPosting(true);
     setErrMsg('');
     setOkMsg('');
@@ -625,19 +657,21 @@ export default function RoomPage() {
           author_type: 'human',
           author_name: authorName || '콘텐츠작업',
           msg_type: 'work_result',
-          content: note || `상품명 초안 저장: ${titleDraft}`,
+          content: note || `상품명 초안 저장: ${title}`,
           ref_ids: Array.from(new Set([
             ...Array.from(selectedRefs),
+            ...(latestContent?.id ? [latestContent.id] : []),
             ...(pickedCandidateId ? [pickedCandidateId] : []),
           ])),
           metadata: {
             entity_type: 'listing_content',
             internal_code: code,
             status: 'editing',
-            title_draft: titleDraft || null,
+            title_draft: title || null,
             thumbnail_status: 'pending',
             detail_status: 'pending',
             target_malls: [],
+            note_only: !title && !!note,
           },
         }),
       });
@@ -645,7 +679,7 @@ export default function RoomPage() {
       if (json._error) setErrMsg(json._error);
       else {
         setContent('');
-        setOkMsg('콘텐츠 작업 기록이 저장되었습니다.');
+        setOkMsg(title ? `상품명 초안 저장됨: ${title}` : '작업 메모가 저장되었습니다.');
         await load();
       }
     } finally {
@@ -686,6 +720,29 @@ export default function RoomPage() {
             >전체 복사</button>
             {roomCopyNote && <span style={{ fontSize: 11, color: '#3FB950' }}>{roomCopyNote}</span>}
           </div>
+          {yardRooms.length > 1 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+              {yardRooms.map((r) => {
+                const active = r.key === roomKey;
+                return (
+                  <Link
+                    key={r.id}
+                    href={`/hajun/${yardKey}/${r.key}`}
+                    style={{
+                      padding: '5px 10px',
+                      borderRadius: 6,
+                      fontSize: 12,
+                      fontWeight: active ? 700 : 500,
+                      textDecoration: 'none',
+                      border: active ? '1px solid var(--accent)' : '1px solid var(--border)',
+                      background: active ? 'rgba(88,166,255,0.15)' : 'var(--bg3)',
+                      color: active ? 'var(--accent)' : 'var(--text2)',
+                    }}
+                  >{r.name}</Link>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div style={S.body} className="msg-body">
@@ -758,14 +815,14 @@ export default function RoomPage() {
             <div style={S.decisionBox}>
               <div style={S.decisionTitle}>콘텐츠 작업</div>
               <div style={S.decisionHint}>
-                상품명·섬네일·상세 작업 메모를 남기고, 쇼핑몰 반영 후 <b>게시 완료</b>를 누르세요.
-                자동 게시하지 않습니다.
+                상품명 초안 또는 메모만 적어도 저장됩니다 (둘 다 가능).
+                쇼핑몰에 직접 반영한 뒤 카드의 <b>게시 완료</b>를 누르세요. 자동 게시 없음.
               </div>
               <input
                 style={{ ...S.input, width: '100%', marginBottom: 8 }}
                 value={titleDraft}
                 onChange={(e) => setTitleDraft(e.target.value)}
-                placeholder="상품명 초안"
+                placeholder="상품명 초안 (선택)"
               />
               <div style={S.btnRow}>
                 <button
@@ -773,7 +830,7 @@ export default function RoomPage() {
                   style={{ ...S.submitBtn, background: '#58A6FF', ...(posting ? S.submitOff : {}) }}
                   disabled={posting}
                   onClick={saveContentNote}
-                >작업 기록 저장</button>
+                >초안/메모 저장</button>
               </div>
             </div>
           )}
@@ -876,7 +933,7 @@ export default function RoomPage() {
 
           <textarea
             style={S.textarea}
-            placeholder={isValidationRoom ? '검증 사유 (선택). 비우면 기본 문구 사용' : '이 방에 남길 메시지...'}
+            placeholder={isValidationRoom ? '검증 사유 (선택). 비우면 기본 문구 사용' : isListingContentRoom ? '작업 메모 (선택). 상품명만 바꿔도 저장 가능' : '이 방에 남길 메시지...'}
             value={content}
             onChange={(e) => setContent(e.target.value)}
           />
