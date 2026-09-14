@@ -17,10 +17,49 @@ export const COREHUB_URL = process.env.COREHUB_URL || 'https://brainpool-corehub
 
 const GROQ_MODEL_CANDIDATES = [
   GROQ_MODEL,
-  'llama-3.1-8b-instant',
   'llama-3.3-70b-versatile',
   'openai/gpt-oss-20b',
+  'meta-llama/llama-4-scout-17b-16e-instruct',
+  'llama-3.1-8b-instant',
 ].filter(Boolean);
+
+/** 방/상품 추천 등 단일 프롬프트용 — 후보 모델 순차 시도 */
+export async function callGroqPrompt(
+  prompt: string,
+  opts?: { temperature?: number; max_tokens?: number }
+): Promise<{ text?: string; model?: string; _error?: string }> {
+  if (!GROQ_KEY) return { _error: 'GROQ_API_KEY 미설정' };
+  const errors: string[] = [];
+  const tried = new Set<string>();
+  for (const model of GROQ_MODEL_CANDIDATES) {
+    if (tried.has(model)) continue;
+    tried.add(model);
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${GROQ_KEY}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: opts?.temperature ?? 0.4,
+        max_tokens: opts?.max_tokens ?? 700,
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      errors.push(`${model}: ${errText.slice(0, 200)}`);
+      // model_not_found 등은 다음 후보 시도
+      continue;
+    }
+    const data = await res.json();
+    const text = (data.choices?.[0]?.message?.content || '').trim();
+    if (text) return { text, model };
+    errors.push(`${model}: empty`);
+  }
+  return { _error: `Groq 후보 전부 실패: ${errors.slice(0, 3).join(' | ')}` };
+}
 
 export function createTraceId() {
   return 'tr-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
@@ -100,286 +139,3 @@ export function buildSnapshotSummary(content: Record<string, unknown>): string {
     parts.push(`씨앗: ${seedRooms.map(r => r.room_name).join(', ')}`);
   return parts.join(' · ');
 }
-
-export function buildSnapshotKeywords(content: Record<string, unknown>): string[] {
-  const house   = (content?.house   || {}) as Record<string, string>;
-  const summary = (content?.summary || {}) as Record<string, number>;
-  const rooms   = (content?.rooms   || []) as Array<Record<string, unknown>>;
-  const kw: string[] = ['life', 'CoreNull'];
-  if (house.primary_language) kw.push(`lang_${house.primary_language}`);
-  if (summary.seed_rooms   > 0) kw.push('seed_active');
-  if (summary.bloomed_seeds > 0) kw.push('bloomed');
-  if (summary.total_fruits  > 0) kw.push('fruit');
-  if (summary.total_harvested > 0) kw.push('harvested');
-  if (rooms.some((r: Record<string, unknown>) => r.visibility === 'public'))  kw.push('public_space');
-  if (rooms.some((r: Record<string, unknown>) => r.visibility === 'family'))  kw.push('family_space');
-  if ((summary.total_messages || 0) > 10) kw.push('high_activity');
-  else if ((summary.total_messages || 0) > 0) kw.push('low_activity');
-  else kw.push('inactive');
-  return kw;
-}
-
-export function calcSnapshotConfidence(snapshot: Record<string, unknown>): number {
-  const summary = ((snapshot.content as Record<string, unknown>)?.summary || {}) as Record<string, number>;
-  const ids = (snapshot.source_message_ids as string[]) || [];
-  let conf = 0.55;
-  if ((summary.total_messages || 0) > 5) conf += 0.10;
-  if ((summary.seed_rooms     || 0) > 0) conf += 0.05;
-  if ((summary.total_fruits   || 0) > 0) conf += 0.05;
-  if (ids.length > 1)                    conf += 0.05;
-  return Math.min(conf, 0.90);
-}
-
-export async function fetchMindWorldSummary(): Promise<string> {
-  try {
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/corenull_rooms?house_id=eq.${HOUSE_ID}&order=updated_at.desc&limit=5`,
-      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, cache: 'no-store' }
-    );
-    if (!res.ok) return '씨앗 데이터 없음';
-    const rooms = await res.json();
-    if (!rooms || rooms.length === 0) return '씨앗 데이터 없음';
-    return rooms
-      .map((r: { name?: string; fruit_state?: string; updated_at?: string }) =>
-        `- ${r.name || '이름없음'} (${r.fruit_state || 'unknown'}) | ${r.updated_at?.slice(0, 10) || ''}`
-      )
-      .join('\n');
-  } catch {
-    return '씨앗 데이터 조회 실패';
-  }
-}
-
-export async function fetchOpportunities(ownerKey: string): Promise<{ text: string; ids: string[] }> {
-  if (!ownerKey) return { text: '', ids: [] };
-  try {
-    const res = await fetch(
-      `${COREHUB_URL}/api/corehub/opportunities?owner_key=${encodeURIComponent(ownerKey)}`,
-      { headers: { 'Content-Type': 'application/json' }, cache: 'no-store' }
-    );
-    if (!res.ok) return { text: '', ids: [] };
-    const json = await res.json();
-    const items = json.data || [];
-    if (items.length === 0) return { text: '', ids: [] };
-    const top = items.slice(0, 3);
-    const ids = top.map((o: { id: string }) => o.id);
-    const text = top
-      .map((o: { title?: string; description?: string; opportunity_type?: string }) =>
-        `- ${o.title || o.description || '발견된 기회'} (${o.opportunity_type || 'opportunity'})`
-      )
-      .join('\n');
-    return { text, ids };
-  } catch {
-    return { text: '', ids: [] };
-  }
-}
-
-export async function consumeOpportunities(ids: string[], outcome = 'shown'): Promise<void> {
-  if (!ids.length) return;
-  try {
-    await Promise.all(ids.map(id =>
-      fetch(`${COREHUB_URL}/api/corehub/opportunities?id=${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ outcome }),
-      })
-    ));
-  } catch { /* ignore */ }
-}
-
-export async function fetchContextSummary(): Promise<string> {
-  try {
-    const data = await supabaseGet('dev_contexts?order=updated_at.desc&limit=1');
-    if (!data || data.length === 0) return '개발 맥락 없음';
-    const c = data[0];
-    const parts: string[] = [];
-    if (c.phase)          parts.push(`페이즈: ${c.phase}`);
-    if (c.status)         parts.push(`상태: ${c.status}`);
-    if (c.last_task)      parts.push(`마지막 작업: ${c.last_task}`);
-    if (c.next_action)    parts.push(`다음 액션: ${c.next_action}`);
-    if (c.current_problems && c.current_problems !== '없음')
-                          parts.push(`현재 문제: ${c.current_problems}`);
-    if (c.summary)        parts.push(`요약: ${c.summary}`);
-    if (Array.isArray(c.next_tasks) && c.next_tasks.length > 0)
-      parts.push(`다음 작업:\n${c.next_tasks.map((t: string) => `  - ${t}`).join('\n')}`);
-    return parts.join('\n') || '맥락 데이터 파싱 실패';
-  } catch {
-    return '개발 맥락 조회 실패';
-  }
-}
-
-export async function saveConversation(payload: {
-  source_ai: string;
-  original_message: string;
-  summary: string;
-  keywords: string[];
-  meta?: Record<string, unknown>;
-}) {
-  try {
-    await fetch(`${SUPABASE_URL}/rest/v1/hajunai_conversations`, {
-      method: 'POST',
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json',
-        Prefer: 'return=minimal',
-      },
-      body: JSON.stringify({ ...payload, created_at: new Date().toISOString() }),
-    });
-  } catch { /* ignore */ }
-}
-
-async function callGeminiChat(
-  systemPrompt: string,
-  userMessage: string,
-  history: Array<{ role: string; content: string }>
-): Promise<{ text?: string; _error?: string }> {
-  if (!GEMINI_KEY) return { _error: 'GEMINI_API_KEY 미설정 (다른 제공자도 사용 불가)' };
-
-  const contents: Array<{ role: string; parts: Array<{ text: string }> }> = [];
-  for (const h of history) {
-    contents.push({
-      role: h.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: h.content }],
-    });
-  }
-  contents.push({ role: 'user', parts: [{ text: userMessage }] });
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents,
-        generationConfig: { temperature: 0.4, maxOutputTokens: 1024 },
-      }),
-    }
-  );
-  if (!res.ok) return { _error: `Gemini 오류: ${await res.text()}` };
-  const data = await res.json();
-  const parts = data.candidates?.[0]?.content?.parts || [];
-  const text = parts
-    .filter((p: { thought?: boolean; text?: string }) => !p.thought && typeof p.text === 'string')
-    .map((p: { text: string }) => p.text)
-    .join('')
-    .trim();
-  if (!text) return { _error: 'Gemini 빈 응답' };
-  return { text };
-}
-
-async function callGroqOnce(
-  model: string,
-  messages: Array<{ role: string; content: string }>
-): Promise<{ text?: string; _error?: string }> {
-  if (!GROQ_KEY) return { _error: 'GROQ_API_KEY 미설정' };
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${GROQ_KEY}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.4,
-      max_tokens: 1024,
-    }),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    return { _error: `Groq(${model}): ${errText}` };
-  }
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content || '';
-  return { text };
-}
-
-async function callNvidiaChat(
-  messages: Array<{ role: string; content: string }>
-): Promise<{ text?: string; _error?: string }> {
-  if (!NVIDIA_KEY) return { _error: 'NVIDIA_API_KEY 미설정' };
-  const res = await fetch(`${NVIDIA_BASE.replace(/\/$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${NVIDIA_KEY}`,
-    },
-    body: JSON.stringify({
-      model: NVIDIA_MODEL,
-      messages,
-      temperature: 0.4,
-      max_tokens: 1024,
-      stream: false,
-    }),
-  });
-  if (!res.ok) return { _error: `NVIDIA(${NVIDIA_MODEL}): ${await res.text()}` };
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content || '';
-  if (!text) return { _error: 'NVIDIA 빈 응답' };
-  return { text };
-}
-
-/** 우선순위: NVIDIA(관제·개발 동일) → Groq → Gemini */
-export async function callGroq(
-  systemPrompt: string,
-  userMessage: string,
-  history: Array<{ role: string; content: string }>
-) {
-  const messages = [
-    { role: 'system', content: systemPrompt },
-    ...history.map((h) => ({ role: h.role === 'user' ? 'user' : 'assistant', content: h.content })),
-    { role: 'user', content: userMessage },
-  ];
-
-  const errors: string[] = [];
-
-  if (NVIDIA_KEY) {
-    const nv = await callNvidiaChat(messages);
-    if (nv.text) return { text: nv.text };
-    if (nv._error) errors.push(nv._error);
-  }
-
-  if (GROQ_KEY) {
-    const tried = new Set<string>();
-    for (const model of GROQ_MODEL_CANDIDATES) {
-      if (tried.has(model)) continue;
-      tried.add(model);
-      const result = await callGroqOnce(model, messages);
-      if (result.text) return { text: result.text };
-      if (result._error) errors.push(result._error);
-    }
-  }
-
-  const gemini = await callGeminiChat(systemPrompt, userMessage, history);
-  if (gemini.text) return { text: gemini.text };
-  if (gemini._error) errors.push(gemini._error);
-
-  return {
-    _error: `채팅 모델 전부 실패: ${errors.slice(0, 3).join(' | ')}`,
-  };
-}
-
-export function parseReply(raw: string): { reply: string; observations: string[] } {
-  const obsMarkers = ['관찰:', '관찰 :', 'Observations:', '관찰사항:'];
-  let splitIdx = -1;
-  let marker = '';
-  for (const m of obsMarkers) {
-    const idx = raw.indexOf(m);
-    if (idx !== -1 && (splitIdx === -1 || idx < splitIdx)) {
-      splitIdx = idx;
-      marker = m;
-    }
-  }
-  if (splitIdx === -1) return { reply: raw.trim(), observations: [] };
-  const reply = raw.slice(0, splitIdx).trim();
-  const obsPart = raw.slice(splitIdx + marker.length).trim();
-  const observations = obsPart
-    .split('\n')
-    .map((l) => l.replace(/^[-–•*]\s*/, '').trim())
-    .filter(Boolean);
-  return { reply, observations };
-}
-
-export { fetchUnderstanding, synthesizeUnderstandingFromKnowledge } from '@/lib/synthesizeUnderstanding';
-export { supabaseGet, supabasePatch } from '@/lib/supabase';
