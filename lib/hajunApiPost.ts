@@ -20,6 +20,7 @@ import {
   synthesizeUnderstandingFromKnowledge,
   supabaseGet,
   supabasePatch,
+  getProductMessages,
 } from '@/lib/hajunApiCore';
 
 async function ensureListingDraftFromPass(params: {
@@ -218,6 +219,97 @@ export async function POST(req: Request) {
     if (action === 'summarize_context') {
       return Response.json({
         _error: 'summarize_context는 축소 복원 중 개발 핸드오프용으로 남아 있습니다. synthesize_context를 사용하세요.',
+        traceId,
+      }, { status: 200 });
+    }
+
+    if (action === 'suggest_listing_title') {
+      const { internal_code, room_id } = body as { internal_code?: string; room_id?: string };
+      if (!internal_code || typeof internal_code !== 'string') {
+        return Response.json({ _error: 'internal_code 필요', traceId }, { status: 200 });
+      }
+      if (!GROQ_KEY) {
+        return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
+      }
+
+      const productMsgs = await getProductMessages(internal_code);
+      if (productMsgs?._error) {
+        return Response.json({ _error: productMsgs._error, traceId }, { status: 200 });
+      }
+      const samples = (Array.isArray(productMsgs) ? productMsgs : []).slice(0, 3);
+      const productText = samples
+        .map((m: { content?: string; metadata?: Record<string, unknown> }) => {
+          const name = typeof m.metadata?.name === 'string' ? m.metadata.name : '';
+          return [name, (m.content || '').slice(0, 1200)].filter(Boolean).join('\n');
+        })
+        .join('\n---\n')
+        .slice(0, 3500);
+
+      if (!productText.trim()) {
+        return Response.json({ _error: '해당 상품 원문을 찾지 못했습니다.', traceId }, { status: 200 });
+      }
+
+      const prompt = [
+        '당신은 한국 오픈마켓 상품명 카피라이터입니다.',
+        '아래 공급처/캡처 원문만 근거로 판매용 상품명 후보 3개를 제안하세요.',
+        '규칙:',
+        '- 한국어만',
+        '- 각 후보는 한 줄, 20~40자 권장',
+        '- 과장 광고·허위 인증·원문에 없는 스펙 금지',
+        '- 번호 매긴 목록만 출력 (1. 2. 3.)',
+        '- 설명 문장 금지',
+        '',
+        `internal_code: ${internal_code}`,
+        '=== 원문 ===',
+        productText,
+      ].join('\n');
+
+      const model = GROQ_MODEL || 'llama-3.1-8b-instant';
+      const aiRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.5,
+          max_tokens: 300,
+        }),
+      });
+      if (!aiRes.ok) {
+        return Response.json({ _error: `AI 호출 실패: ${await aiRes.text()}`, traceId }, { status: 200 });
+      }
+      const aiJson = await aiRes.json();
+      const text = (aiJson.choices?.[0]?.message?.content || '').trim();
+      if (!text) {
+        return Response.json({ _error: 'AI 상품명 추천이 비어 있습니다', traceId }, { status: 200 });
+      }
+
+      const suggestions = text
+        .split('\n')
+        .map((line: string) => line.replace(/^\s*\d+[\.\)\-\:]\s*/, '').trim())
+        .filter((line: string) => line.length >= 4)
+        .slice(0, 5);
+
+      // 제안만 기록 (확정 아님)
+      if (room_id && suggestions.length > 0) {
+        await insertHajunMessage({
+          room_id,
+          author_type: 'ai',
+          author_name: 'HajunAI',
+          msg_type: 'answer',
+          content: `상품명 추천 (${internal_code})\n${suggestions.map((s, i) => `${i + 1}. ${s}`).join('\n')}`,
+          ref_ids: [],
+          metadata: {
+            entity_type: 'listing_title_suggestion',
+            internal_code,
+            suggestions,
+            decided_by: 'ai_suggest_only',
+          },
+        });
+      }
+
+      return Response.json({
+        payload: { internal_code, suggestions, raw: text },
         traceId,
       }, { status: 200 });
     }
