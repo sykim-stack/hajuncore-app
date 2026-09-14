@@ -14,6 +14,9 @@ import {
   GROQ_KEY,
   GROQ_MODEL,
   GEMINI_KEY,
+  NVIDIA_KEY,
+  NVIDIA_MODEL,
+  NVIDIA_BASE,
   SUPABASE_URL,
   SUPABASE_KEY,
   fetchUnderstanding,
@@ -23,43 +26,86 @@ import {
   getProductMessages,
 } from '@/lib/hajunApiCore';
 
-async function callGroqWithFallback(
+/** 채팅과 동일: NVIDIA NIM 우선 → Groq 후보 → 실패 시 에러 */
+async function callListingAI(
   prompt: string,
   opts?: { temperature?: number; max_tokens?: number }
-): Promise<{ text?: string; _error?: string }> {
-  if (!GROQ_KEY) return { _error: 'GROQ_API_KEY 미설정' };
-  const candidates = [
-    GROQ_MODEL,
-    'llama-3.3-70b-versatile',
-    'openai/gpt-oss-20b',
-    'meta-llama/llama-4-scout-17b-16e-instruct',
-    'llama-3.1-8b-instant',
-  ].filter(Boolean) as string[];
+): Promise<{ text?: string; provider?: string; _error?: string }> {
   const errors: string[] = [];
-  const tried = new Set<string>();
-  for (const model of candidates) {
-    if (tried.has(model)) continue;
-    tried.add(model);
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: opts?.temperature ?? 0.4,
-        max_tokens: opts?.max_tokens ?? 700,
-      }),
-    });
-    if (!res.ok) {
-      errors.push(`${model}: ${(await res.text()).slice(0, 160)}`);
-      continue;
+  const temperature = opts?.temperature ?? 0.4;
+  const max_tokens = opts?.max_tokens ?? 700;
+
+  // 1) NVIDIA NIM (chat과 동일 스택)
+  if (NVIDIA_KEY) {
+    try {
+      const res = await fetch(`${NVIDIA_BASE.replace(/\/$/, '')}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${NVIDIA_KEY}`,
+        },
+        body: JSON.stringify({
+          model: NVIDIA_MODEL,
+          messages: [{ role: 'user', content: prompt }],
+          temperature,
+          max_tokens,
+          stream: false,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const text = (data.choices?.[0]?.message?.content || '').trim();
+        if (text) return { text, provider: `nvidia:${NVIDIA_MODEL}` };
+        errors.push(`NVIDIA(${NVIDIA_MODEL}): empty`);
+      } else {
+        errors.push(`NVIDIA(${NVIDIA_MODEL}): ${(await res.text()).slice(0, 160)}`);
+      }
+    } catch (e) {
+      errors.push(`NVIDIA: ${e instanceof Error ? e.message : String(e)}`);
     }
-    const data = await res.json();
-    const text = (data.choices?.[0]?.message?.content || '').trim();
-    if (text) return { text };
-    errors.push(`${model}: empty`);
+  } else {
+    errors.push('NVIDIA_API_KEY 미설정');
   }
-  return { _error: errors.slice(0, 3).join(' | ') || 'Groq 실패' };
+
+  // 2) Groq 후보 (보조)
+  if (GROQ_KEY) {
+    const candidates = [
+      GROQ_MODEL,
+      'llama-3.3-70b-versatile',
+      'openai/gpt-oss-20b',
+      'meta-llama/llama-4-scout-17b-16e-instruct',
+      'llama-3.1-8b-instant',
+    ].filter(Boolean) as string[];
+    const tried = new Set<string>();
+    for (const model of candidates) {
+      if (tried.has(model)) continue;
+      tried.add(model);
+      try {
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature,
+            max_tokens,
+          }),
+        });
+        if (!res.ok) {
+          errors.push(`${model}: ${(await res.text()).slice(0, 120)}`);
+          continue;
+        }
+        const data = await res.json();
+        const text = (data.choices?.[0]?.message?.content || '').trim();
+        if (text) return { text, provider: `groq:${model}` };
+        errors.push(`${model}: empty`);
+      } catch (e) {
+        errors.push(`${model}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  }
+
+  return { _error: errors.slice(0, 4).join(' | ') || 'AI 호출 실패' };
 }
 
 async function ensureListingDraftFromPass(params: {
@@ -168,7 +214,9 @@ export async function POST(req: Request) {
     if (action === 'ai_respond') {
       const { room_id, ref_ids = [] } = body as { room_id?: string; ref_ids?: string[] };
       if (!room_id) return Response.json({ _error: 'room_id 필요', traceId }, { status: 200 });
-      if (!GROQ_KEY) return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
+      if (!NVIDIA_KEY && !GROQ_KEY) {
+        return Response.json({ _error: 'NVIDIA_API_KEY 또는 GROQ_API_KEY 필요', traceId }, { status: 200 });
+      }
       const messages = await supabaseGet(`hajun_messages?room_id=eq.${room_id}&order=created_at.desc&limit=8`);
       const thread = [...(messages || [])].reverse();
       const prompt = [
@@ -179,7 +227,7 @@ export async function POST(req: Request) {
         thread.map((m: { author_name: string; msg_type: string; content: string }) => `[${m.author_name}/${m.msg_type}] ${m.content}`).join('\n'),
         '=== 답변 ===',
       ].join('\n');
-      const aiResult = await callGroqWithFallback(prompt, { temperature: 0.4, max_tokens: 700 });
+      const aiResult = await callListingAI(prompt, { temperature: 0.4, max_tokens: 700 });
       if (aiResult._error || !aiResult.text) {
         return Response.json({ _error: `AI 호출 실패: ${aiResult._error || '빈 응답'}`, traceId }, { status: 200 });
       }
@@ -220,7 +268,7 @@ export async function POST(req: Request) {
       const opportunitySection = opportunities.text
         ? `\n발견된 기회 (CoreHub Publish):\n${opportunities.text}\n이 기회들은 강요하지 말고, 대화 흐름에서 자연스럽게 언급할 것.`
         : '';
-      const systemPrompt = `당신은 HajunAI입니다. 챗봇이 아닙니다.\n마당(관제·개발·브라이언풀 등)에 쌓인 원본을 이해하고, 사람과 말하며 그 이해를 키우는 아이입니다.\nchat은 현관이고, 기억의 본체는 마당 원본과 아래 "현재 이해"입니다.\n\n정체성:\n- 세션이 끝나면 모든 것이 사라진다는 식으로 자신을 설명하지 마세요.\n- 이해를 물으면 contexts에 종합된 현재 이해와 마당·개발 맥락을 근거로 답하세요.\n- 문서나 말을 지금 창에만 붙인 것과, 마당에 원본으로 남은 것을 구분하세요. 마당에 남기기는 사람이 명시하거나 별도 기능으로 합니다.\n- 근거 없는 사실을 지어내지 마세요. 모르면 모른다고 하세요.\n- 제안·정리·연결은 하되, 사람 대신 확정·채택하지 마세요.\n\n규칙:\n- 핵심만 간결하게 답하세요.\n- 마크다운 금지 (**, ##, - 목록 등 사용하지 말 것).\n- 한국어로만 답하세요.\n- 필요하다고 판단되면 답변 끝에 "관찰:" 섹션을 추가하세요.\n  형식: 관찰:\n- 항목1\n- 항목2${opportunitySection}\n\n현재 개발 맥락:\n${contextSummary}\n\n현재 씨앗/공간 상태 (MindWorld):\n${mindWorldSummary}\n\nHajunAI 현재 이해 (마당·Knowledge 원본을 종합한 상태, 세션 밖에도 유지됨):\n${understandingText || '아직 종합된 이해 없음'}`;
+      const systemPrompt = `당신은 HajunAI입니다. 챗봇이 아닙니다.\n마당(관제·개발·브라이언풀 등)에 쌓인 원본을 이해하고, 사람과 말하며 그 이해를 키우는 아이입니다.\nchat은 현관이고, 기억의 본체는 마당 원본과 아래 \"현재 이해\"입니다.\n\n정체성:\n- 세션이 끝나면 모든 것이 사라진다는 식으로 자신을 설명하지 마세요.\n- 이해를 물으면 contexts에 종합된 현재 이해와 마당·개발 맥락을 근거로 답하세요.\n- 문서나 말을 지금 창에만 붙인 것과, 마당에 원본으로 남은 것을 구분하세요. 마당에 남기기는 사람이 명시하거나 별도 기능으로 합니다.\n- 근거 없는 사실을 지어내지 마세요. 모르면 모른다고 하세요.\n- 제안·정리·연결은 하되, 사람 대신 확정·채택하지 마세요.\n\n규칙:\n- 핵심만 간결하게 답하세요.\n- 마크다운 금지 (**, ##, - 목록 등 사용하지 말 것).\n- 한국어로만 답하세요.\n- 필요하다고 판단되면 답변 끝에 \"관찰:\" 섹션을 추가하세요.\n  형식: 관찰:\n- 항목1\n- 항목2${opportunitySection}\n\n현재 개발 맥락:\n${contextSummary}\n\n현재 씨앗/공간 상태 (MindWorld):\n${mindWorldSummary}\n\nHajunAI 현재 이해 (마당·Knowledge 원본을 종합한 상태, 세션 밖에도 유지됨):\n${understandingText || '아직 종합된 이해 없음'}`;
       const groqResult = await callGroq(systemPrompt, message.trim(), history);
       if (groqResult._error) {
         return Response.json({ _error: groqResult._error, traceId }, { status: 200 });
@@ -262,8 +310,8 @@ export async function POST(req: Request) {
       if (!internal_code || typeof internal_code !== 'string') {
         return Response.json({ _error: 'internal_code 필요', traceId }, { status: 200 });
       }
-      if (!GROQ_KEY) {
-        return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
+      if (!NVIDIA_KEY && !GROQ_KEY) {
+        return Response.json({ _error: 'NVIDIA_API_KEY 또는 GROQ_API_KEY 필요', traceId }, { status: 200 });
       }
 
       const productMsgs = await getProductMessages(internal_code);
@@ -298,7 +346,7 @@ export async function POST(req: Request) {
         productText,
       ].join('\n');
 
-      const aiResult = await callGroqWithFallback(prompt, { temperature: 0.5, max_tokens: 300 });
+      const aiResult = await callListingAI(prompt, { temperature: 0.5, max_tokens: 300 });
       if (aiResult._error || !aiResult.text) {
         return Response.json({ _error: `AI 호출 실패: ${aiResult._error || '빈 응답'}`, traceId }, { status: 200 });
       }
