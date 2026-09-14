@@ -81,7 +81,6 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-/** 말풍선 1개 내용만 복사 */
 function MessageCopyButton({ text }: { text: string }) {
   const [note, setNote] = useState('');
   return (
@@ -280,6 +279,8 @@ export default function RoomPage() {
   const [candidateCount, setCandidateCount] = useState(0);
   const [titleDraft, setTitleDraft] = useState('');
   const [yardRooms, setYardRooms] = useState<HajunRoom[]>([]);
+  const [titleSuggestions, setTitleSuggestions] = useState<string[]>([]);
+  const [suggesting, setSuggesting] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -300,7 +301,6 @@ export default function RoomPage() {
     const loadedMessages: HajunMessage[] = viewJson.payload?.messages || [];
     setMessages(loadedMessages);
 
-    // 콘텐츠방: 최근 listing_content의 상품명 초안 복원
     if (yardKey === 'product_listing' && roomKey === 'listing_content') {
       const latestContent = [...loadedMessages].reverse().find(
         (m) => m.metadata?.entity_type === 'listing_content'
@@ -616,9 +616,51 @@ export default function RoomPage() {
     }
   };
 
+  const suggestTitle = async () => {
+    if (suggesting || posting || !isListingContentRoom) return;
+    const code =
+      pickedCode ||
+      resolveInternalCode(messages, selectedRefs) ||
+      (() => {
+        const latest = [...messages].reverse().find((m) => {
+          const e = m.metadata?.entity_type;
+          return e === 'listing_content' || e === 'listing_draft';
+        });
+        return typeof latest?.metadata?.internal_code === 'string'
+          ? latest.metadata.internal_code
+          : '';
+      })();
+    if (!code) {
+      setErrMsg('상품 코드가 없어 추천할 수 없습니다.');
+      return;
+    }
+    setSuggesting(true);
+    setErrMsg('');
+    setOkMsg('');
+    try {
+      const res = await fetch('/api/hajun?action=suggest_listing_title', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ internal_code: code, room_id: room?.id }),
+      });
+      const json = await res.json();
+      if (json._error) {
+        setErrMsg(json._error);
+        setTitleSuggestions([]);
+      } else {
+        const list = (json.payload?.suggestions || []) as string[];
+        setTitleSuggestions(list);
+        if (list[0]) setTitleDraft(list[0]);
+        setOkMsg(list.length ? `AI 상품명 ${list.length}개 추천. 골라 수정 후 저장하세요.` : '추천 결과가 비었습니다.');
+        await load();
+      }
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
   const saveContentNote = async () => {
     if (!room || posting || !isListingContentRoom) return;
-    // 방 안 listing_content / draft 계보에서 자동 추출 (참조 선택 불필요)
     const code =
       pickedCode ||
       resolveInternalCode(messages, selectedRefs) ||
@@ -641,7 +683,6 @@ export default function RoomPage() {
       setErrMsg('상품명 초안 또는 작업 메모 중 하나는 입력하세요.');
       return;
     }
-    // 최근 listing_content를 ref에 연결
     const latestContent = [...messages].reverse().find(
       (m) => m.metadata?.entity_type === 'listing_content'
     );
@@ -815,14 +856,43 @@ export default function RoomPage() {
             <div style={S.decisionBox}>
               <div style={S.decisionTitle}>콘텐츠 작업</div>
               <div style={S.decisionHint}>
-                상품명 초안 또는 메모만 적어도 저장됩니다 (둘 다 가능).
-                쇼핑몰에 직접 반영한 뒤 카드의 <b>게시 완료</b>를 누르세요. 자동 게시 없음.
+                AI가 상품명을 추천하고, 사람이 고르거나 수정한 뒤 저장합니다.
+                쇼핑몰 반영 후 카드의 <b>게시 완료</b>. 자동 게시 없음.
               </div>
+              <div style={S.btnRow}>
+                <button
+                  type="button"
+                  style={{ ...S.submitBtn, background: '#39C5CF', ...(suggesting || posting ? S.submitOff : {}) }}
+                  disabled={suggesting || posting}
+                  onClick={suggestTitle}
+                >{suggesting ? '추천 중...' : 'AI 상품명 추천'}</button>
+              </div>
+              {titleSuggestions.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 10, marginBottom: 8 }}>
+                  {titleSuggestions.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setTitleDraft(s)}
+                      style={{
+                        textAlign: 'left',
+                        padding: '8px 10px',
+                        borderRadius: 6,
+                        border: titleDraft === s ? '1px solid var(--accent)' : '1px solid var(--border)',
+                        background: titleDraft === s ? 'rgba(88,166,255,0.12)' : 'var(--bg)',
+                        color: 'var(--text)',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                      }}
+                    >{s}</button>
+                  ))}
+                </div>
+              )}
               <input
-                style={{ ...S.input, width: '100%', marginBottom: 8 }}
+                style={{ ...S.input, width: '100%', marginBottom: 8, marginTop: 8 }}
                 value={titleDraft}
                 onChange={(e) => setTitleDraft(e.target.value)}
-                placeholder="상품명 초안 (선택)"
+                placeholder="상품명 초안 (AI 추천 후 수정 가능)"
               />
               <div style={S.btnRow}>
                 <button
