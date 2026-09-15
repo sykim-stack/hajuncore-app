@@ -10,17 +10,19 @@ export const GROQ_KEY    = process.env.GROQ_API_KEY!;
 export const GROQ_MODEL  = process.env.GROQ_MODEL || '';
 /** 관제·개발 마당과 동일 계열 — NVIDIA NIM (OpenAI 호환) */
 export const NVIDIA_KEY   = process.env.NVIDIA_API_KEY || process.env.NIM_API_KEY || '';
-export const NVIDIA_MODEL = process.env.NVIDIA_MODEL || 'meta/llama-3.1-8b-instruct';
+export const NVIDIA_MODEL = process.env.NVIDIA_MODEL || 'meta/llama-3.3-70b-instruct';
 export const NVIDIA_BASE  = process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1';
 export const HOUSE_ID    = '6341b872-4555-4fdc-8f1d-8009b2b1764f';
 export const COREHUB_URL = process.env.COREHUB_URL || 'https://brainpool-corehub.vercel.app';
 
 const GROQ_MODEL_CANDIDATES = [
   GROQ_MODEL,
-  'llama-3.3-70b-versatile',
-  'openai/gpt-oss-20b',
-  'meta-llama/llama-4-scout-17b-16e-instruct',
   'llama-3.1-8b-instant',
+  'openai/gpt-oss-20b',
+  'openai/gpt-oss-120b',
+  'qwen/qwen3-32b',
+  'llama-3.3-70b-versatile',
+  'meta-llama/llama-4-scout-17b-16e-instruct',
 ].filter(Boolean);
 
 /** 방/상품 추천 등 단일 프롬프트용 — 후보 모델 순차 시도 */
@@ -96,9 +98,10 @@ export function groupProductCandidates(messages: Array<Record<string, unknown>>)
   const grouped = new Map<string, Record<string, unknown>>();
   for (const message of messages) {
     const metadata = isProductMetadata(message.metadata) ? message.metadata : {};
-    const code = typeof metadata.internal_code === 'string' ? metadata.internal_code : '';
-    if (!code || grouped.has(code)) continue;
-    grouped.set(code, { ...message, metadata });
+    const code = typeof metadata.internal_code === 'string' ? message.metadata as any : {};
+    const codeStr = typeof metadata.internal_code === 'string' ? metadata.internal_code : '';
+    if (!codeStr || grouped.has(codeStr)) continue;
+    grouped.set(codeStr, { ...message, metadata });
   }
   return Array.from(grouped.values());
 }
@@ -333,31 +336,6 @@ async function callGroqOnce(
   return { text };
 }
 
-async function callNvidiaChat(
-  messages: Array<{ role: string; content: string }>
-): Promise<{ text?: string; _error?: string }> {
-  if (!NVIDIA_KEY) return { _error: 'NVIDIA_API_KEY 미설정' };
-  const res = await fetch(`${NVIDIA_BASE.replace(/\/$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${NVIDIA_KEY}`,
-    },
-    body: JSON.stringify({
-      model: NVIDIA_MODEL,
-      messages,
-      temperature: 0.4,
-      max_tokens: 1024,
-      stream: false,
-    }),
-  });
-  if (!res.ok) return { _error: `NVIDIA(${NVIDIA_MODEL}): ${await res.text()}` };
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content || '';
-  if (!text) return { _error: 'NVIDIA 빈 응답' };
-  return { text };
-}
-
 /** 우선순위: NVIDIA(관제·개발 동일) → Groq → Gemini */
 export async function callGroq(
   systemPrompt: string,
@@ -373,9 +351,36 @@ export async function callGroq(
   const errors: string[] = [];
 
   if (NVIDIA_KEY) {
-    const nv = await callNvidiaChat(messages);
-    if (nv.text) return { text: nv.text };
-    if (nv._error) errors.push(nv._error);
+    const nvidiaModels = Array.from(new Set([
+      NVIDIA_MODEL,
+      'meta/llama-3.3-70b-instruct',
+      'meta/llama-3.1-70b-instruct',
+      'google/gemma-2-9b-it',
+    ].filter(Boolean)));
+    for (const model of nvidiaModels) {
+      const res = await fetch(`${NVIDIA_BASE.replace(/\/$/, '')}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${NVIDIA_KEY}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: 0.4,
+          max_tokens: 1024,
+          stream: false,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const text = (data.choices?.[0]?.message?.content || '').trim();
+        if (text) return { text };
+        errors.push(`NVIDIA(${model}): empty`);
+      } else {
+        errors.push(`NVIDIA(${model}): ${(await res.text()).slice(0, 120)}`);
+      }
+    }
   }
 
   if (GROQ_KEY) {
