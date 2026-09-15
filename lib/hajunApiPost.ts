@@ -26,7 +26,6 @@ import {
   getProductMessages,
 } from '@/lib/hajunApiCore';
 
-/** 채팅과 동일: NVIDIA NIM 우선 → Groq 후보 → 실패 시 에러 */
 async function callListingAI(
   prompt: string,
   opts?: { temperature?: number; max_tokens?: number }
@@ -35,46 +34,54 @@ async function callListingAI(
   const temperature = opts?.temperature ?? 0.4;
   const max_tokens = opts?.max_tokens ?? 700;
 
-  // 1) NVIDIA NIM (chat과 동일 스택)
   if (NVIDIA_KEY) {
-    try {
-      const res = await fetch(`${NVIDIA_BASE.replace(/\/$/, '')}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${NVIDIA_KEY}`,
-        },
-        body: JSON.stringify({
-          model: NVIDIA_MODEL,
-          messages: [{ role: 'user', content: prompt }],
-          temperature,
-          max_tokens,
-          stream: false,
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const text = (data.choices?.[0]?.message?.content || '').trim();
-        if (text) return { text, provider: `nvidia:${NVIDIA_MODEL}` };
-        errors.push(`NVIDIA(${NVIDIA_MODEL}): empty`);
-      } else {
-        errors.push(`NVIDIA(${NVIDIA_MODEL}): ${(await res.text()).slice(0, 160)}`);
+    const nvidiaModels = Array.from(new Set([
+      NVIDIA_MODEL,
+      'meta/llama-3.3-70b-instruct',
+      'meta/llama-3.1-70b-instruct',
+      'google/gemma-2-9b-it',
+    ].filter(Boolean)));
+    for (const model of nvidiaModels) {
+      try {
+        const res = await fetch(`${NVIDIA_BASE.replace(/\/$/, '')}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${NVIDIA_KEY}`,
+          },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature,
+            max_tokens,
+            stream: false,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const text = (data.choices?.[0]?.message?.content || '').trim();
+          if (text) return { text, provider: `nvidia:${model}` };
+          errors.push(`NVIDIA(${model}): empty`);
+        } else {
+          const err = (await res.text()).slice(0, 120);
+          errors.push(`NVIDIA(${model}): ${err}`);
+        }
+      } catch (e) {
+        errors.push(`NVIDIA(${model}): ${e instanceof Error ? e.message : String(e)}`);
       }
-    } catch (e) {
-      errors.push(`NVIDIA: ${e instanceof Error ? e.message : String(e)}`);
     }
   } else {
     errors.push('NVIDIA_API_KEY 미설정');
   }
 
-  // 2) Groq 후보 (보조)
   if (GROQ_KEY) {
     const candidates = [
       GROQ_MODEL,
-      'llama-3.3-70b-versatile',
-      'openai/gpt-oss-20b',
-      'meta-llama/llama-4-scout-17b-16e-instruct',
       'llama-3.1-8b-instant',
+      'openai/gpt-oss-20b',
+      'openai/gpt-oss-120b',
+      'qwen/qwen3-32b',
+      'llama-3.3-70b-versatile',
     ].filter(Boolean) as string[];
     const tried = new Set<string>();
     for (const model of candidates) {
@@ -105,7 +112,63 @@ async function callListingAI(
     }
   }
 
+  if (GEMINI_KEY) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: { temperature, maxOutputTokens: max_tokens },
+          }),
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const parts = data.candidates?.[0]?.content?.parts || [];
+        const text = parts
+          .filter((p: { thought?: boolean; text?: string }) => !p.thought && typeof p.text === 'string')
+          .map((p: { text: string }) => p.text)
+          .join('')
+          .trim();
+        if (text) return { text, provider: 'gemini:gemini-2.5-flash' };
+        errors.push('Gemini: empty');
+      } else {
+        errors.push(`Gemini: ${(await res.text()).slice(0, 120)}`);
+      }
+    } catch (e) {
+      errors.push(`Gemini: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   return { _error: errors.slice(0, 4).join(' | ') || 'AI 호출 실패' };
+}
+
+function buildHeuristicTitles(samples: Array<{ content?: string; metadata?: Record<string, unknown> | null }>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (s: string) => {
+    const t = s.replace(/\s+/g, ' ').trim();
+    if (t.length < 4 || t.length > 60) return;
+    if (seen.has(t)) return;
+    seen.add(t);
+    out.push(t);
+  };
+  for (const m of samples) {
+    const name = typeof m.metadata?.name === 'string' ? m.metadata.name : '';
+    if (name) {
+      push(name);
+      push(name.replace(/\[[^\]]*\]/g, '').replace(/\([^)]*\)/g, '').trim());
+    }
+    const content = m.content || '';
+    const fromLine = content.match(/제품명\s*\n([^\n]+)/)?.[1]
+      || content.match(/상품명\s*[:：]?\s*([^\n]+)/)?.[1]
+      || content.split('\n').find((l) => l.trim().length > 8 && l.trim().length < 50);
+    if (fromLine) push(fromLine);
+  }
+  return out.slice(0, 5);
 }
 
 async function ensureListingDraftFromPass(params: {
@@ -214,8 +277,8 @@ export async function POST(req: Request) {
     if (action === 'ai_respond') {
       const { room_id, ref_ids = [] } = body as { room_id?: string; ref_ids?: string[] };
       if (!room_id) return Response.json({ _error: 'room_id 필요', traceId }, { status: 200 });
-      if (!NVIDIA_KEY && !GROQ_KEY) {
-        return Response.json({ _error: 'NVIDIA_API_KEY 또는 GROQ_API_KEY 필요', traceId }, { status: 200 });
+      if (!NVIDIA_KEY && !GROQ_KEY && !GEMINI_KEY) {
+        return Response.json({ _error: 'NVIDIA_API_KEY / GROQ_API_KEY / GEMINI_API_KEY 중 하나 필요', traceId }, { status: 200 });
       }
       const messages = await supabaseGet(`hajun_messages?room_id=eq.${room_id}&order=created_at.desc&limit=8`);
       const thread = [...(messages || [])].reverse();
@@ -268,7 +331,7 @@ export async function POST(req: Request) {
       const opportunitySection = opportunities.text
         ? `\n발견된 기회 (CoreHub Publish):\n${opportunities.text}\n이 기회들은 강요하지 말고, 대화 흐름에서 자연스럽게 언급할 것.`
         : '';
-      const systemPrompt = `당신은 HajunAI입니다. 챗봇이 아닙니다.\n마당(관제·개발·브라이언풀 등)에 쌓인 원본을 이해하고, 사람과 말하며 그 이해를 키우는 아이입니다.\nchat은 현관이고, 기억의 본체는 마당 원본과 아래 \"현재 이해\"입니다.\n\n정체성:\n- 세션이 끝나면 모든 것이 사라진다는 식으로 자신을 설명하지 마세요.\n- 이해를 물으면 contexts에 종합된 현재 이해와 마당·개발 맥락을 근거로 답하세요.\n- 문서나 말을 지금 창에만 붙인 것과, 마당에 원본으로 남은 것을 구분하세요. 마당에 남기기는 사람이 명시하거나 별도 기능으로 합니다.\n- 근거 없는 사실을 지어내지 마세요. 모르면 모른다고 하세요.\n- 제안·정리·연결은 하되, 사람 대신 확정·채택하지 마세요.\n\n규칙:\n- 핵심만 간결하게 답하세요.\n- 마크다운 금지 (**, ##, - 목록 등 사용하지 말 것).\n- 한국어로만 답하세요.\n- 필요하다고 판단되면 답변 끝에 \"관찰:\" 섹션을 추가하세요.\n  형식: 관찰:\n- 항목1\n- 항목2${opportunitySection}\n\n현재 개발 맥락:\n${contextSummary}\n\n현재 씨앗/공간 상태 (MindWorld):\n${mindWorldSummary}\n\nHajunAI 현재 이해 (마당·Knowledge 원본을 종합한 상태, 세션 밖에도 유지됨):\n${understandingText || '아직 종합된 이해 없음'}`;
+      const systemPrompt = `당신은 HajunAI입니다. 챗봇이 아닙니다.\n마당(관제·개발·브라이언풀 등)에 쌓인 원본을 이해하고, 사람과 말하며 그 이해를 키우는 아이입니다.\nchat은 현관이고, 기억의 본체는 마당 원본과 아래 "현재 이해"입니다.\n\n정체성:\n- 세션이 끝나면 모든 것이 사라진다는 식으로 자신을 설명하지 마세요.\n- 이해를 물으면 contexts에 종합된 현재 이해와 마당·개발 맥락을 근거로 답하세요.\n- 문서나 말을 지금 창에만 붙인 것과, 마당에 원본으로 남은 것을 구분하세요. 마당에 남기기는 사람이 명시하거나 별도 기능으로 합니다.\n- 근거 없는 사실을 지어내지 마세요. 모르면 모른다고 하세요.\n- 제안·정리·연결은 하되, 사람 대신 확정·채택하지 마세요.\n\n규칙:\n- 핵심만 간결하게 답하세요.\n- 마크다운 금지 (**, ##, - 목록 등 사용하지 말 것).\n- 한국어로만 답하세요.\n- 필요하다고 판단되면 답변 끝에 "관찰:" 섹션을 추가하세요.\n  형식: 관찰:\n- 항목1\n- 항목2${opportunitySection}\n\n현재 개발 맥락:\n${contextSummary}\n\n현재 씨앗/공간 상태 (MindWorld):\n${mindWorldSummary}\n\nHajunAI 현재 이해 (마당·Knowledge 원본을 종합한 상태, 세션 밖에도 유지됨):\n${understandingText || '아직 종합된 이해 없음'}`;
       const groqResult = await callGroq(systemPrompt, message.trim(), history);
       if (groqResult._error) {
         return Response.json({ _error: groqResult._error, traceId }, { status: 200 });
@@ -310,10 +373,6 @@ export async function POST(req: Request) {
       if (!internal_code || typeof internal_code !== 'string') {
         return Response.json({ _error: 'internal_code 필요', traceId }, { status: 200 });
       }
-      if (!NVIDIA_KEY && !GROQ_KEY) {
-        return Response.json({ _error: 'NVIDIA_API_KEY 또는 GROQ_API_KEY 필요', traceId }, { status: 200 });
-      }
-
       const productMsgs = await getProductMessages(internal_code);
       if (productMsgs?._error) {
         return Response.json({ _error: productMsgs._error, traceId }, { status: 200 });
@@ -346,17 +405,46 @@ export async function POST(req: Request) {
         productText,
       ].join('\n');
 
-      const aiResult = await callListingAI(prompt, { temperature: 0.5, max_tokens: 300 });
-      if (aiResult._error || !aiResult.text) {
-        return Response.json({ _error: `AI 호출 실패: ${aiResult._error || '빈 응답'}`, traceId }, { status: 200 });
-      }
-      const text = aiResult.text;
+      const heuristic = buildHeuristicTitles(samples);
+      let suggestions: string[] = [];
+      let text = '';
+      let provider = 'heuristic';
+      let aiError: string | null = null;
 
-      const suggestions = text
-        .split('\n')
-        .map((line: string) => line.replace(/^\s*\d+[\.\)\-\:]\s*/, '').trim())
-        .filter((line: string) => line.length >= 4)
-        .slice(0, 5);
+      if (NVIDIA_KEY || GROQ_KEY || GEMINI_KEY) {
+        const aiResult = await callListingAI(prompt, { temperature: 0.5, max_tokens: 300 });
+        if (aiResult.text) {
+          text = aiResult.text;
+          provider = aiResult.provider || 'ai';
+          suggestions = text
+            .split('\n')
+            .map((line: string) => line.replace(/^\s*\d+[\.\)\-\:]\s*/, '').trim())
+            .filter((line: string) => line.length >= 4)
+            .slice(0, 5);
+        } else {
+          aiError = aiResult._error || '빈 응답';
+        }
+      } else {
+        aiError = 'AI 키 없음';
+      }
+
+      if (suggestions.length === 0) {
+        suggestions = heuristic;
+        provider = 'heuristic';
+        text = suggestions.map((s, i) => `${i + 1}. ${s}`).join('\n');
+      } else {
+        for (const h of heuristic) {
+          if (suggestions.length >= 5) break;
+          if (!suggestions.includes(h)) suggestions.push(h);
+        }
+      }
+
+      if (suggestions.length === 0) {
+        return Response.json({
+          _error: `상품명 후보를 만들 수 없습니다. ${aiError || ''}`.trim(),
+          traceId,
+        }, { status: 200 });
+      }
 
       if (room_id && suggestions.length > 0) {
         await insertHajunMessage({
@@ -364,19 +452,20 @@ export async function POST(req: Request) {
           author_type: 'ai',
           author_name: 'HajunAI',
           msg_type: 'answer',
-          content: `상품명 추천 (${internal_code})\n${suggestions.map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}`,
+          content: `상품명 추천 (${internal_code})\n${suggestions.map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}${aiError ? `\n(참고: AI 일부 실패 → ${aiError.slice(0, 80)})` : ''}`,
           ref_ids: [],
           metadata: {
             entity_type: 'listing_title_suggestion',
             internal_code,
             suggestions,
-            decided_by: 'ai_suggest_only',
+            decided_by: provider === 'heuristic' ? 'heuristic_suggest' : 'ai_suggest_only',
+            provider,
           },
         });
       }
 
       return Response.json({
-        payload: { internal_code, suggestions, raw: text },
+        payload: { internal_code, suggestions, raw: text, provider, ai_error: aiError },
         traceId,
       }, { status: 200 });
     }
