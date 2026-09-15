@@ -43,6 +43,23 @@ function fmtTime(iso: string) {
   return new Date(iso).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+function extractProductName(content: string, metadata?: Record<string, unknown> | null): string {
+  if (typeof metadata?.name === 'string' && metadata.name.trim()) return metadata.name.trim();
+  if (typeof metadata?.title_draft === 'string' && metadata.title_draft.trim()) return metadata.title_draft.trim();
+  const fromContent =
+    content.match(/제품명\s*\n([^\n]+)/)?.[1]?.trim() ||
+    content.match(/상품명\s*[:：]?\s*([^\n]+)/)?.[1]?.trim() ||
+    '';
+  if (fromContent && !fromContent.startsWith('검증 통과') && !fromContent.startsWith('콘텐츠 작업')) {
+    return fromContent.slice(0, 50);
+  }
+  return '';
+}
+
+function displayCode(code: string) {
+  return (code || '').replace(/^onchannel:/, '') || '코드없음';
+}
+
 type Cand = { id: string; content: string; metadata?: Record<string, unknown> | null };
 
 export default function RoomPage() {
@@ -71,6 +88,8 @@ export default function RoomPage() {
   const [titleDraft, setTitleDraft] = useState('');
   const [titleSuggestions, setTitleSuggestions] = useState<string[]>([]);
   const [suggesting, setSuggesting] = useState(false);
+  const [nameByCode, setNameByCode] = useState<Record<string, string>>({});
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
@@ -87,15 +106,32 @@ export default function RoomPage() {
     const loaded: HajunMessage[] = viewJson.payload?.messages || [];
     setMessages(loaded);
 
-    if (yardKey === 'product_validation') {
+    if (yardKey === 'product_validation' || yardKey === 'product_listing') {
       try {
         const res = await fetch('/api/hajun?action=product_candidates');
         const json = await res.json();
         const list = (json.payload?.candidates || []) as Cand[];
-        setCandidates(list); setCandidateCount(list.length);
-        setCandidateError(list.length ? '' : '상품 후보가 없습니다.');
-      } catch (e) { setCandidateError(e instanceof Error ? e.message : '후보 조회 실패'); }
-    } else if (yardKey === 'product_listing') {
+        const map: Record<string, string> = {};
+        for (const c of list) {
+          const code = typeof c.metadata?.internal_code === 'string' ? c.metadata.internal_code : '';
+          if (!code) continue;
+          const nm = extractProductName(c.content || '', c.metadata);
+          if (nm) map[code] = nm;
+        }
+        setNameByCode(map);
+        if (yardKey === 'product_validation') {
+          setCandidates(list);
+          setCandidateCount(list.length);
+          setCandidateError(list.length ? '' : '상품 후보가 없습니다.');
+        }
+      } catch (e) {
+        if (yardKey === 'product_validation') {
+          setCandidateError(e instanceof Error ? e.message : '후보 조회 실패');
+        }
+      }
+    }
+
+    if (yardKey === 'product_listing') {
       try {
         const res = await fetch('/api/hajun?action=listing_queue');
         const json = await res.json();
@@ -329,12 +365,13 @@ export default function RoomPage() {
       <option value="">{isValidationRoom ? '상품 후보 선택...' : '작업할 상품 선택...'}</option>
       {candidates.map((c) => {
         const code = typeof c.metadata?.internal_code === 'string' ? c.metadata.internal_code : '';
-        const name = typeof c.metadata?.name === 'string' ? c.metadata.name
-          : typeof c.metadata?.title_draft === 'string' && c.metadata.title_draft ? String(c.metadata.title_draft)
-          : (c.content.split('\n')[0] || code || c.id).slice(0, 40);
+        const name =
+          extractProductName(c.content || '', c.metadata) ||
+          (code ? nameByCode[code] : '') ||
+          '상품명 미확인';
         return (
           <option key={c.id} value={c.id}>
-            {(code || '코드없음').replace(/^onchannel:/, '')} · {name}
+            {displayCode(code)} · {name}
           </option>
         );
       })}
@@ -373,6 +410,14 @@ export default function RoomPage() {
           {messages.map((m) => {
             const entity = String(m.metadata?.entity_type || '');
             const code = typeof m.metadata?.internal_code === 'string' ? m.metadata.internal_code : '';
+            const productName =
+              extractProductName(m.content || '', m.metadata) ||
+              (code ? nameByCode[code] : '') ||
+              '';
+            const isLong = (m.content || '').length > 260;
+            const expanded = expandedIds.has(m.id);
+            const preview = !isLong || expanded ? m.content : `${m.content.slice(0, 260)}…`;
+            const isProductLike = entity === 'product_candidate' || entity === 'market_research';
             return (
               <div key={m.id} style={{ ...S.msgCard, ...(m.author_type === 'ai' ? S.msgCardAi : {}) }}>
                 <div style={S.msgTop}>
@@ -382,8 +427,35 @@ export default function RoomPage() {
                   <span style={S.author}>{m.author_name}</span>
                   <span style={S.time}>{fmtTime(m.created_at)}</span>
                 </div>
-                <div style={S.content}>{m.content}</div>
-                {code && <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text2)' }}>internal_code: <b>{code}</b></div>}
+                {isProductLike && productName && (
+                  <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>{productName}</div>
+                )}
+                {(code || productName) && (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11, color: 'var(--text2)', marginBottom: 6 }}>
+                    {code && <span>코드: <b>{displayCode(code)}</b></span>}
+                    {entity === 'product_candidate' && <span style={{ color: '#3FB950' }}>상품 후보</span>}
+                    {entity === 'market_research' && <span style={{ color: '#58A6FF' }}>시장조사</span>}
+                    {entity === 'listing_draft' && <span>등록대기</span>}
+                    {entity === 'listing_content' && <span>콘텐츠</span>}
+                    {entity === 'product_validation_decision' && (
+                      <span style={{ color: String(m.metadata?.decision) === 'pass' ? '#3FB950' : '#F0883E' }}>
+                        결정: {String(m.metadata?.decision || '')}
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div style={S.content}>{preview}</div>
+                {isLong && (
+                  <button
+                    type="button"
+                    onClick={() => setExpandedIds((prev) => {
+                      const next = new Set(prev);
+                      next.has(m.id) ? next.delete(m.id) : next.add(m.id);
+                      return next;
+                    })}
+                    style={{ display: 'block', marginTop: 8, padding: '5px 9px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', fontSize: 11 }}
+                  >{expanded ? '원문 접기' : '원문 전체 보기'}</button>
+                )}
                 <div style={{ ...S.btnRow, marginTop: 10 }}>
                   {isDiscoveryRoom && entity === 'product_candidate' && (
                     <button type="button" style={{ ...S.submitBtn, background: '#3FB950' }} onClick={() => selectForValidation(m)}>검증 선택</button>
@@ -405,7 +477,7 @@ export default function RoomPage() {
           {isValidationRoom && (
             <div style={S.decisionBox}>
               <div style={S.decisionTitle}>상품 검증 결정</div>
-              <div style={S.decisionHint}>{currentCode ? `대상: ${currentCode}` : '대상 미선택'} · 후보 {candidateCount}개</div>
+              <div style={S.decisionHint}>{currentCode ? `대상: ${displayCode(currentCode)}${nameByCode[currentCode] ? ` · ${nameByCode[currentCode]}` : ''}` : '대상 미선택'} · 후보 {candidateCount}개</div>
               {candidateError && <div style={S.errMsg}>⚠ {candidateError}</div>}
               {productSelect}
               <div style={S.btnRow}>
@@ -419,7 +491,7 @@ export default function RoomPage() {
           {isListingContentRoom && (
             <div style={S.decisionBox}>
               <div style={S.decisionTitle}>콘텐츠 작업 · 상품명</div>
-              <div style={S.decisionHint}>상품을 고른 뒤 상품명을 추천·수정합니다. {currentCode ? `대상: ${currentCode}` : '대상 미선택'} · {candidateCount}개</div>
+              <div style={S.decisionHint}>상품을 고른 뒤 상품명을 추천·수정합니다. {currentCode ? `대상: ${displayCode(currentCode)}${nameByCode[currentCode] ? ` · ${nameByCode[currentCode]}` : ''}` : '대상 미선택'} · {candidateCount}개</div>
               {candidateError && <div style={S.errMsg}>⚠ {candidateError}</div>}
               {productSelect}
               <div style={S.btnRow}>
