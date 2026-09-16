@@ -45,6 +45,7 @@ function fmtTime(iso: string) {
 
 function extractProductName(content: string, metadata?: Record<string, unknown> | null): string {
   if (typeof metadata?.name === 'string' && metadata.name.trim()) return metadata.name.trim();
+  if (typeof metadata?.product_name === 'string' && metadata.product_name.trim()) return metadata.product_name.trim();
   if (typeof metadata?.title_draft === 'string' && metadata.title_draft.trim()) return metadata.title_draft.trim();
   const fromContent =
     content.match(/제품명\s*\n([^\n]+)/)?.[1]?.trim() ||
@@ -106,6 +107,7 @@ export default function RoomPage() {
     const loaded: HajunMessage[] = viewJson.payload?.messages || [];
     setMessages(loaded);
 
+    // 상품명 맵 (코드 → 이름) — 검증/등록 공통
     if (yardKey === 'product_validation' || yardKey === 'product_listing') {
       try {
         const res = await fetch('/api/hajun?action=product_candidates');
@@ -116,7 +118,11 @@ export default function RoomPage() {
           const code = typeof c.metadata?.internal_code === 'string' ? c.metadata.internal_code : '';
           if (!code) continue;
           const nm = extractProductName(c.content || '', c.metadata);
-          if (nm) map[code] = nm;
+          if (!nm) continue;
+          map[code] = nm;
+          const short = code.replace(/^onchannel:/, '');
+          if (short && short !== code) map[short] = nm;
+          if (!code.startsWith('onchannel:') && short) map[`onchannel:${short}`] = nm;
         }
         setNameByCode(map);
         if (yardKey === 'product_validation') {
@@ -215,8 +221,12 @@ export default function RoomPage() {
       const json = await res.json();
       if (json._error) setErrMsg(json._error);
       else {
-        setOkMsg(decision === 'pass' ? 'pass 완료. 등록대기방 확인' : `${label} 저장됨`);
+        setOkMsg(decision === 'pass' ? 'pass 완료. 등록대기방으로 이동' : `${label} 저장됨`);
         setContent(''); setPickedCode(''); setPickedCandidateId('');
+        if (decision === 'pass') {
+          window.location.href = '/hajun/product_listing/listing_queue';
+          return;
+        }
         await load();
       }
     } finally { setPosting(false); }
@@ -368,6 +378,7 @@ export default function RoomPage() {
         const name =
           extractProductName(c.content || '', c.metadata) ||
           (code ? nameByCode[code] : '') ||
+          (code ? nameByCode[code.replace(/^onchannel:/, '')] : '') ||
           '상품명 미확인';
         return (
           <option key={c.id} value={c.id}>
@@ -389,9 +400,9 @@ export default function RoomPage() {
             <Link href={`/hajun/${yardKey}`} style={{ color: 'var(--text3)' }}>{YARD_LABEL[yardKey] || yardKey}</Link>
             {' > 방'}
           </div>
-          <div style={S.title}>{room?.name || '방'}</div>
-          {yardRooms.length > 1 && (
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+          <div style={S.title}>{room?.name || roomKey}</div>
+          {yardRooms.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
               {yardRooms.map((r) => (
                 <Link key={r.id} href={`/hajun/${yardKey}/${r.key}`} style={{
                   padding: '5px 10px', borderRadius: 6, fontSize: 12, textDecoration: 'none',
@@ -413,11 +424,17 @@ export default function RoomPage() {
             const productName =
               extractProductName(m.content || '', m.metadata) ||
               (code ? nameByCode[code] : '') ||
+              (code ? nameByCode[code.replace(/^onchannel:/, '')] : '') ||
               '';
             const isLong = (m.content || '').length > 260;
             const expanded = expandedIds.has(m.id);
             const preview = !isLong || expanded ? m.content : `${m.content.slice(0, 260)}…`;
-            const isProductLike = entity === 'product_candidate' || entity === 'market_research';
+            const isProductLike =
+              entity === 'product_candidate' ||
+              entity === 'market_research' ||
+              entity === 'listing_draft' ||
+              entity === 'listing_content' ||
+              entity === 'listing_published';
             return (
               <div key={m.id} style={{ ...S.msgCard, ...(m.author_type === 'ai' ? S.msgCardAi : {}) }}>
                 <div style={S.msgTop}>
@@ -477,7 +494,7 @@ export default function RoomPage() {
           {isValidationRoom && (
             <div style={S.decisionBox}>
               <div style={S.decisionTitle}>상품 검증 결정</div>
-              <div style={S.decisionHint}>{currentCode ? `대상: ${displayCode(currentCode)}${nameByCode[currentCode] ? ` · ${nameByCode[currentCode]}` : ''}` : '대상 미선택'} · 후보 {candidateCount}개</div>
+              <div style={S.decisionHint}>{currentCode ? `대상: ${displayCode(currentCode)}${nameByCode[currentCode] || nameByCode[currentCode.replace(/^onchannel:/, '')] ? ` · ${nameByCode[currentCode] || nameByCode[currentCode.replace(/^onchannel:/, '')]}` : ''}` : '대상 미선택'} · 후보 {candidateCount}개</div>
               {candidateError && <div style={S.errMsg}>⚠ {candidateError}</div>}
               {productSelect}
               <div style={S.btnRow}>
@@ -491,29 +508,27 @@ export default function RoomPage() {
           {isListingContentRoom && (
             <div style={S.decisionBox}>
               <div style={S.decisionTitle}>콘텐츠 작업 · 상품명</div>
-              <div style={S.decisionHint}>상품을 고른 뒤 상품명을 추천·수정합니다. {currentCode ? `대상: ${displayCode(currentCode)}${nameByCode[currentCode] ? ` · ${nameByCode[currentCode]}` : ''}` : '대상 미선택'} · {candidateCount}개</div>
+              <div style={S.decisionHint}>상품을 고른 뒤 상품명을 추천·수정합니다. {currentCode ? `대상: ${displayCode(currentCode)}${nameByCode[currentCode] || nameByCode[currentCode.replace(/^onchannel:/, '')] ? ` · ${nameByCode[currentCode] || nameByCode[currentCode.replace(/^onchannel:/, '')]}` : ''}` : '대상 미선택'} · {candidateCount}개</div>
               {candidateError && <div style={S.errMsg}>⚠ {candidateError}</div>}
               {productSelect}
               <div style={S.btnRow}>
                 <button type="button" style={{ ...S.submitBtn, background: '#39C5CF', ...(!currentCode || suggesting ? S.submitOff : {}) }}
                   disabled={!currentCode || suggesting || posting} onClick={suggestTitle}>
-                  {suggesting ? '추천 중...' : 'AI 상품명 추천'}
+                  {suggesting ? '추천 중…' : '상품명 추천'}
                 </button>
+                <button type="button" style={{ ...S.submitBtn, background: '#58A6FF' }} disabled={posting} onClick={saveContentNote}>초안/메모 저장</button>
               </div>
               {titleSuggestions.length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: '10px 0' }}>
-                  {titleSuggestions.map((s) => (
-                    <button key={s} type="button" onClick={() => setTitleDraft(s)} style={{
-                      textAlign: 'left', padding: '8px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 12,
-                      border: titleDraft === s ? '1px solid var(--accent)' : '1px solid var(--border)',
-                      background: titleDraft === s ? 'rgba(88,166,255,0.12)' : 'var(--bg)', color: 'var(--text)',
-                    }}>{s}</button>
+                <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {titleSuggestions.map((s, i) => (
+                    <button key={i} type="button" onClick={() => setTitleDraft(s)}
+                      style={{ textAlign: 'left', padding: '8px 10px', borderRadius: 6, border: titleDraft === s ? '1px solid var(--accent)' : '1px solid var(--border)', background: titleDraft === s ? 'rgba(88,166,255,0.12)' : 'var(--bg)', color: 'var(--text)', cursor: 'pointer', fontSize: 12 }}>
+                      {i + 1}. {s}
+                    </button>
                   ))}
                 </div>
               )}
-              <input style={{ ...S.input, marginBottom: 8 }} value={titleDraft} onChange={(e) => setTitleDraft(e.target.value)}
-                placeholder="상품명 초안 (선택 후 수정 가능)" />
-              <button type="button" style={{ ...S.submitBtn, background: '#58A6FF' }} disabled={posting} onClick={saveContentNote}>초안/메모 저장</button>
+              <input style={{ ...S.input, marginTop: 10 }} value={titleDraft} onChange={(e) => setTitleDraft(e.target.value)} placeholder="상품명 초안 (선택·수정)" />
             </div>
           )}
 
@@ -521,18 +536,39 @@ export default function RoomPage() {
             <div style={S.decisionBox}>
               <div style={S.decisionTitle}>등록대기</div>
               <div style={S.decisionHint}>listing_draft 카드의 콘텐츠 시작을 누르세요.</div>
-              <input style={S.input} value={titleDraft} onChange={(e) => setTitleDraft(e.target.value)} placeholder="상품명 초안 (선택)" />
             </div>
           )}
 
-          <input style={{ ...S.input, width: 160, marginBottom: 8 }} value={authorName} onChange={(e) => setAuthorName(e.target.value)} placeholder="작성자" />
-          <textarea style={S.textarea} value={content} onChange={(e) => setContent(e.target.value)}
-            placeholder={isValidationRoom ? '검증 사유 (선택)' : isListingContentRoom ? '작업 메모 (선택)' : '메시지...'} />
-          <button style={{ ...S.submitBtn, ...(!content.trim() || posting ? S.submitOff : {}) }} disabled={!content.trim() || posting} onClick={submit}>
-            {posting ? '저장 중...' : '방에 남기기'}
-          </button>
+          {!isValidationRoom && !isListingContentRoom && (
+            <>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <input style={{ ...S.input, flex: 1 }} value={authorName} onChange={(e) => setAuthorName(e.target.value)} placeholder="작성자" />
+              </div>
+              <textarea style={S.textarea} value={content} onChange={(e) => setContent(e.target.value)} placeholder="메시지 입력" />
+              <div style={S.btnRow}>
+                <button type="button" style={{ ...S.submitBtn, ...(!content.trim() || posting ? S.submitOff : {}) }} disabled={!content.trim() || posting} onClick={submit}>
+                  {posting ? '저장 중…' : '방에 남기기'}
+                </button>
+              </div>
+            </>
+          )}
+
+          {isValidationRoom && (
+            <>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <input style={{ ...S.input, flex: 1 }} value={authorName} onChange={(e) => setAuthorName(e.target.value)} placeholder="작성자" />
+              </div>
+              <textarea style={S.textarea} value={content} onChange={(e) => setContent(e.target.value)} placeholder="검증 사유 (선택)" />
+              <div style={S.btnRow}>
+                <button type="button" style={{ ...S.submitBtn, ...(!content.trim() || posting ? S.submitOff : {}) }} disabled={!content.trim() || posting} onClick={submit}>
+                  {posting ? '저장 중…' : '방에 남기기'}
+                </button>
+              </div>
+            </>
+          )}
+
           {errMsg && <div style={S.errMsg}>⚠ {errMsg}</div>}
-          {okMsg && <div style={S.okMsg}>✅ {okMsg}</div>}
+          {okMsg && <div style={S.okMsg}>✓ {okMsg}</div>}
         </div>
       </main>
     </div>
