@@ -28,39 +28,85 @@ async function callGroqWithFallback(
   prompt: string,
   opts?: { temperature?: number; max_tokens?: number }
 ): Promise<{ text?: string; _error?: string }> {
-  if (!GROQ_KEY) return { _error: 'GROQ_API_KEY 미설정' };
+  // 무료/접근 가능한 모델 우선. 70B·Llama4는 키 권한에 따라 404 나는 경우 많음.
   const candidates = [
     GROQ_MODEL,
-    'llama-3.3-70b-versatile',
-    'openai/gpt-oss-20b',
-    'meta-llama/llama-4-scout-17b-16e-instruct',
     'llama-3.1-8b-instant',
+    'openai/gpt-oss-20b',
+    'openai/gpt-oss-120b',
+    'qwen/qwen3-32b',
+    'llama-3.3-70b-versatile',
   ].filter(Boolean) as string[];
   const errors: string[] = [];
   const tried = new Set<string>();
-  for (const model of candidates) {
-    if (tried.has(model)) continue;
-    tried.add(model);
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: opts?.temperature ?? 0.4,
-        max_tokens: opts?.max_tokens ?? 700,
-      }),
-    });
-    if (!res.ok) {
-      errors.push(`${model}: ${(await res.text()).slice(0, 160)}`);
-      continue;
+
+  if (GROQ_KEY) {
+    for (const model of candidates) {
+      if (tried.has(model)) continue;
+      tried.add(model);
+      try {
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: opts?.temperature ?? 0.4,
+            max_tokens: opts?.max_tokens ?? 700,
+          }),
+        });
+        if (!res.ok) {
+          errors.push(`${model}: ${(await res.text()).slice(0, 120)}`);
+          continue;
+        }
+        const data = await res.json();
+        const text = (data.choices?.[0]?.message?.content || '').trim();
+        if (text) return { text };
+        errors.push(`${model}: empty`);
+      } catch (e) {
+        errors.push(`${model}: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
-    const data = await res.json();
-    const text = (data.choices?.[0]?.message?.content || '').trim();
-    if (text) return { text };
-    errors.push(`${model}: empty`);
+  } else {
+    errors.push('GROQ_API_KEY 미설정');
   }
-  return { _error: errors.slice(0, 3).join(' | ') || 'Groq 실패' };
+
+  // Gemini 폴백
+  if (GEMINI_KEY) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: opts?.temperature ?? 0.4,
+              maxOutputTokens: opts?.max_tokens ?? 700,
+            },
+          }),
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const parts = data.candidates?.[0]?.content?.parts || [];
+        const text = parts
+          .filter((p: { thought?: boolean; text?: string }) => !p.thought && typeof p.text === 'string')
+          .map((p: { text: string }) => p.text)
+          .join('')
+          .trim();
+        if (text) return { text };
+        errors.push('gemini: empty');
+      } else {
+        errors.push(`gemini: ${(await res.text()).slice(0, 120)}`);
+      }
+    } catch (e) {
+      errors.push(`gemini: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  return { _error: errors.slice(0, 3).join(' | ') || 'AI 호출 실패' };
 }
 
 function extractNameFromProductMessage(content: string, metadata?: Record<string, unknown> | null): string {
@@ -304,9 +350,7 @@ export async function POST(req: Request) {
       if (!internal_code || typeof internal_code !== 'string') {
         return Response.json({ _error: 'internal_code 필요', traceId }, { status: 200 });
       }
-      if (!GROQ_KEY) {
-        return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
-      }
+      // GROQ/Gemini/휴리스틱 폴백 — 키 하나라도 있으면 시도
 
       const productMsgs = await getProductMessages(internal_code);
       if (productMsgs?._error) {
@@ -341,16 +385,40 @@ export async function POST(req: Request) {
       ].join('\n');
 
       const aiResult = await callGroqWithFallback(prompt, { temperature: 0.5, max_tokens: 300 });
-      if (aiResult._error || !aiResult.text) {
-        return Response.json({ _error: `AI 호출 실패: ${aiResult._error || '빈 응답'}`, traceId }, { status: 200 });
-      }
-      const text = aiResult.text;
+      let text = aiResult.text || '';
+      let suggestions = text
+        ? text
+            .split('\n')
+            .map((line: string) => line.replace(/^\s*\d+[\.\)\-\:]\s*/, '').trim())
+            .filter((line: string) => line.length >= 4)
+            .slice(0, 5)
+        : [];
 
-      const suggestions = text
-        .split('\n')
-        .map((line: string) => line.replace(/^\s*\d+[\.\)\-\:]\s*/, '').trim())
-        .filter((line: string) => line.length >= 4)
-        .slice(0, 5);
+      // AI 전부 실패해도 원문 상품명으로 초안 제공 (작업 막지 않음)
+      if (suggestions.length === 0) {
+        const heuristic: string[] = [];
+        for (const m of samples) {
+          const nm =
+            (typeof m.metadata?.name === 'string' && m.metadata.name.trim()) ||
+            (typeof m.metadata?.product_name === 'string' && m.metadata.product_name.trim()) ||
+            (typeof m.metadata?.title_draft === 'string' && m.metadata.title_draft.trim()) ||
+            '';
+          if (nm && !heuristic.includes(nm)) heuristic.push(nm.slice(0, 60));
+          const fromContent =
+            (m.content || '').match(/상품명\s*[:：]?\s*([^\n]+)/)?.[1]?.trim() ||
+            (m.content || '').match(/제품명\s*[:：]?\s*([^\n]+)/)?.[1]?.trim() ||
+            '';
+          if (fromContent && !heuristic.includes(fromContent)) heuristic.push(fromContent.slice(0, 60));
+        }
+        if (heuristic.length === 0) {
+          return Response.json({
+            _error: `AI 호출 실패: ${aiResult._error || '빈 응답'}`,
+            traceId,
+          }, { status: 200 });
+        }
+        suggestions = heuristic.slice(0, 3);
+        text = suggestions.map((s, i) => `${i + 1}. ${s}`).join('\n');
+      }
 
       if (room_id && suggestions.length > 0) {
         await insertHajunMessage({
