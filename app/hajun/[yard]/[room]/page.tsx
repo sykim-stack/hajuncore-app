@@ -470,12 +470,12 @@ export default function RoomPage() {
     </select>
   );
 
-  if (loading) return <div style={S.page}><Sidebar yardKey={yardKey} rooms={yardRooms} /><main style={S.main}><div style={S.empty}>로딩...</div></main></div>;
-  if (!room) return <div style={S.page}><Sidebar yardKey={yardKey} rooms={yardRooms} /><main style={S.main}><div style={S.empty}>방을 찾을 수 없습니다.</div></main></div>;
+  if (loading) return <div style={S.page}><Sidebar /><main style={S.main}><div style={S.empty}>로딩...</div></main></div>;
+  if (!room) return <div style={S.page}><Sidebar /><main style={S.main}><div style={S.empty}>방을 찾을 수 없습니다.</div></main></div>;
 
   return (
     <div style={S.page}>
-      <Sidebar yardKey={yardKey} rooms={yardRooms} />
+      <Sidebar />
       <main style={S.main}>
         <div style={S.header}>
           <div style={S.crumb}>
