@@ -293,145 +293,214 @@ export async function POST(req: Request) {
       if (!internal_code || typeof internal_code !== 'string') {
         return Response.json({ _error: 'internal_code 필요', traceId }, { status: 200 });
       }
+
       const productMsgs = await getProductMessages(internal_code);
-      if (productMsgs?._error) return Response.json({ _error: productMsgs._error, traceId }, { status: 200 });
+      if (productMsgs?._error) {
+        return Response.json({ _error: productMsgs._error, traceId }, { status: 200 });
+      }
       const samples = (Array.isArray(productMsgs) ? productMsgs : []).slice(0, 5);
-      const productText = samples
-        .map((m: { content?: string; metadata?: Record<string, unknown> }) => {
-          const name = typeof m.metadata?.name === 'string' ? m.metadata.name : '';
-          const pname = typeof m.metadata?.product_name === 'string' ? m.metadata.product_name : '';
-          return [name, pname, (m.content || '').slice(0, 1800)].filter(Boolean).join('\n');
-        })
-        .join('\n---\n')
-        .slice(0, 5000);
-      if (!productText.trim()) {
-        return Response.json({ _error: '해당 상품 원문을 찾지 못했습니다.', traceId }, { status: 200 });
-      }
 
-      const prompt = [
-        '역할: 쿠팡/스마트스토어 상품명 카피라이터.',
-        '원문만 근거로 판매용 상품명 5개를 만든다. 원문을 짧게 줄인 요약이 아니다.',
-        '',
-        '각 후보는 아래 중 다른 각도를 쓴다 (5개가 서로 달라야 함):',
-        'A) 검색형: 핵심 검색어를 앞에 배치',
-        'B) 용도형: 사용 상황·설치 위치를 강조',
-        'C) 구성형: 세트/구성/형태를 강조',
-        'D) 대상형: 누가 쓰는지(운전자/차량용 등)',
-        'E) 혜택형: 원문에 있는 기능·편의만으로 표현',
-        '',
-        '형식: 32~55자. 한 줄에 상품명 하나만. 명사 나열. 완전한 끝말.',
-        '원문에 있는 단어만 조합. 없는 스펙 금지.',
-        '',
-        '절대 금지: 원문 앞부분만 자른 것 / 후보끼리 거의 같은 문장 / 온채널·코드 / 잘린 끝말(임시 연락, 팬티 드)',
-        '',
-        '나쁜 예: 자동차 주차번호판 차량용 대시보드 알림판 임시 연락',
-        '좋은 예: 주차 전화번호 알림판 차량용 대시보드 임시 연락처 번호판',
-        '좋은 예: 자동차 대시보드 주차번호판 자석 연락처 알림 표시판',
-        '좋은 예: 차량용 임시주차 전화번호판 대시보드 거치 알림판',
-        '',
-        '출력: 1. ~ 5. 상품명만. 설명 금지.',
-        '',
-        `코드: ${internal_code}`,
-        '=== 원문 ===',
-        productText,
-      ].join('\n');
-
-      const titleModels = [
-        GROQ_MODEL, 'openai/gpt-oss-120b', 'qwen/qwen3-32b',
-        'llama-3.3-70b-versatile', 'openai/gpt-oss-20b', 'llama-3.1-8b-instant',
-      ].filter(Boolean) as string[];
-
-      let text = '';
-      if (GROQ_KEY) {
-        const tried = new Set<string>();
-        for (const model of titleModels) {
-          if (tried.has(model)) continue;
-          tried.add(model);
-          try {
-            const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
-              body: JSON.stringify({
-                model,
-                messages: [{ role: 'user', content: prompt }],
-                temperature: 0.8,
-                max_tokens: 600,
-              }),
-            });
-            if (!res.ok) continue;
-            const data = await res.json();
-            const t = (data.choices?.[0]?.message?.content || '').trim();
-            if (t) { text = t; break; }
-          } catch { /* next */ }
+      const nameCandidates: string[] = [];
+      for (const m of samples) {
+        const meta = (m.metadata || {}) as Record<string, unknown>;
+        for (const key of ['name', 'product_name', 'title_draft'] as const) {
+          const v = meta[key];
+          if (typeof v === 'string' && v.trim()) nameCandidates.push(v.trim());
         }
+        const c = typeof m.content === 'string' ? m.content : '';
+        const fromContent =
+          c.match(/상품명\s*[:：]?\s*([^\n]+)/)?.[1]?.trim() ||
+          c.match(/제품명\s*[:：]?\s*([^\n]+)/)?.[1]?.trim() ||
+          c.match(/제품명\s*\n([^\n]+)/)?.[1]?.trim() ||
+          '';
+        if (fromContent) nameCandidates.push(fromContent);
       }
-      if (!text) {
-        const aiResult = await callGroqWithFallback(prompt, { temperature: 0.8, max_tokens: 600 });
-        text = aiResult.text || '';
-      }
 
-      const cleanTitle = (line: string) =>
-        line.replace(/^\s*\d+[\.\)\-\:]\s*/, '').replace(/^[-–•*]\s*/, '')
-          .replace(/["'`]/g, '').replace(/\s+/g, ' ').replace(/온채널|onchannel/gi, '').trim();
+      const cleanBase = (s: string) =>
+        s
+          .replace(/온채널|onchannel/gi, '')
+          .replace(/\bCH\d+\b/gi, '')
+          .replace(/[|｜]/g, ' ')
+          .replace(/\s*-\s*$/g, '')
+          .replace(/\s+/g, ' ')
+          .trim();
 
-      const isIncomplete = (s: string) =>
-        /(임시\s*연락|팬티\s*드|알림판\s*임|번호판\s*임|[이가을를의사에]$)/.test(s);
+      const bases = nameCandidates
+        .map(cleanBase)
+        .filter((s) => s.length >= 6)
+        .filter((s, i, arr) => arr.indexOf(s) === i);
 
-      const tooSimilar = (a: string, b: string) => {
-        const ta = new Set(a.replace(/\s+/g, '').split(''));
-        const tb = new Set(b.replace(/\s+/g, '').split(''));
-        let inter = 0;
-        for (const ch of ta) if (tb.has(ch)) inter++;
-        const union = ta.size + tb.size - inter || 1;
-        return inter / union > 0.85;
+      const primary = bases[0] || '';
+      const productText = samples
+        .map((m: { content?: string }) => (m.content || '').slice(0, 1200))
+        .join('\n')
+        .slice(0, 3000);
+
+      const buildVariants = (src: string): string[] => {
+        const out: string[] = [];
+        const ph = src
+          .split(/\s+/)
+          .map((p) => p.replace(/[-\/]+$/g, '').trim())
+          .filter(Boolean);
+        if (ph.length === 0) return out;
+
+        const full = ph.join(' ');
+        if (full.length >= 12 && full.length <= 55) out.push(full);
+
+        if (ph.length >= 4) {
+          const rotated = [...ph.slice(2), ...ph.slice(0, 2)].join(' ');
+          if (rotated.length >= 12 && rotated.length <= 55) out.push(rotated);
+        }
+
+        if (ph.length >= 5) {
+          const compact = [...ph.slice(0, 2), ...ph.slice(-3)].join(' ');
+          if (compact.length >= 12 && compact.length <= 55) out.push(compact);
+        }
+
+        const useIdx = ph.findIndex((p) => p.includes('용') || p.includes('차량') || p.includes('남성') || p.includes('여성'));
+        if (useIdx > 0) {
+          const reordered = [ph[useIdx], ...ph.filter((_, i) => i !== useIdx)].join(' ');
+          if (reordered.length >= 12 && reordered.length <= 55) out.push(reordered);
+        }
+
+        const setIdx = ph.findIndex((p) => /세트|종|매|개입|구성/.test(p));
+        if (setIdx >= 0) {
+          const setFirst = [ph[setIdx], ...ph.filter((_, i) => i !== setIdx)].join(' ');
+          if (setFirst.length >= 12 && setFirst.length <= 55) out.push(setFirst);
+        }
+
+        if (ph.length >= 5) {
+          const short = ph.slice(0, Math.min(5, ph.length)).join(' ');
+          if (short.length >= 12 && short.length <= 55) out.push(short);
+        }
+
+        return out;
       };
 
-      let suggestions = text
-        ? text.split('\n').map(cleanTitle)
-            .filter((line: string) => line.length >= 22 && line.length <= 60)
-            .filter((line: string) => !isIncomplete(line))
-            .filter((line: string, i: number, arr: string[]) =>
-              arr.findIndex((x) => x === line || tooSimilar(x, line)) === i)
-            .slice(0, 5)
-        : [];
-
-      if (suggestions.length < 2) {
-        const heuristic: string[] = [];
-        for (const m of samples) {
-          const nm =
-            (typeof m.metadata?.name === 'string' && m.metadata.name.trim()) ||
-            (typeof m.metadata?.product_name === 'string' && m.metadata.product_name.trim()) ||
-            (typeof m.metadata?.title_draft === 'string' && m.metadata.title_draft.trim()) || '';
-          const cleaned = nm.replace(/온채널|onchannel/gi, '').replace(/\s+/g, ' ').trim();
-          if (cleaned && cleaned.length >= 12 && !heuristic.includes(cleaned)) heuristic.push(cleaned.slice(0, 55));
-          const fromContent =
-            (m.content || '').match(/상품명\s*[:：]?\s*([^\n]+)/)?.[1]?.trim() ||
-            (m.content || '').match(/제품명\s*[:：]?\s*([^\n]+)/)?.[1]?.trim() || '';
-          const fc = fromContent.replace(/온채널|onchannel/gi, '').replace(/\s+/g, ' ').trim();
-          if (fc && fc.length >= 12 && !heuristic.includes(fc)) heuristic.push(fc.slice(0, 55));
+      let suggestions = buildVariants(primary);
+      for (const b of bases.slice(1, 3)) {
+        for (const v of buildVariants(b)) {
+          if (suggestions.length >= 6) break;
+          if (!suggestions.includes(v)) suggestions.push(v);
         }
-        for (const h of heuristic) {
-          if (suggestions.length >= 5) break;
-          if (!suggestions.some((s) => tooSimilar(s, h))) suggestions.push(h);
-        }
-        if (suggestions.length === 0) {
-          return Response.json({ _error: '상품명 추천 실패: AI·원문 모두 유효 후보 없음', traceId }, { status: 200 });
-        }
-        text = suggestions.map((s, i) => `${i + 1}. ${s}`).join('\n');
       }
 
-      if (room_id && suggestions.length > 0) {
+      try {
+        if (primary && GROQ_KEY) {
+          const prompt = [
+            '쿠팡 상품명 카피라이터. 아래 원문 상품명을 바탕으로 서로 다른 판매 상품명 4개.',
+            '규칙: 28~50자, 명사 나열, 끝말 완전, 원문 단어만 사용, 서로 다른 순서/강조.',
+            '금지: 원문 앞부분만 자르기, 온채널, 코드, 잘린 단어.',
+            '출력: 1. 2. 3. 4. 만.',
+            `원문: ${primary}`,
+            productText ? `부가: ${productText.slice(0, 800)}` : '',
+          ].filter(Boolean).join('\n');
+
+          const models = [
+            GROQ_MODEL,
+            'openai/gpt-oss-120b',
+            'qwen/qwen3-32b',
+            'llama-3.1-8b-instant',
+          ].filter(Boolean) as string[];
+
+          let aiText = '';
+          for (const model of models) {
+            try {
+              const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
+                body: JSON.stringify({
+                  model,
+                  messages: [{ role: 'user', content: prompt }],
+                  temperature: 0.7,
+                  max_tokens: 400,
+                }),
+              });
+              if (!res.ok) continue;
+              const data = await res.json();
+              const t = (data.choices?.[0]?.message?.content || '').trim();
+              if (t) { aiText = t; break; }
+            } catch { /* next */ }
+          }
+
+          if (aiText) {
+            const isIncomplete = (s: string) =>
+              /(임시\s*연락|팬티\s*드|지압\s*3|지압\s*-|[이가을를의사에\-]$)/.test(s) ||
+              s.endsWith('-');
+
+            const aiOnes = aiText
+              .split('\n')
+              .map((line: string) =>
+                line
+                  .replace(/^\s*\d+[\.\)\-\:]\s*/, '')
+                  .replace(/["'`]/g, '')
+                  .replace(/온채널|onchannel/gi, '')
+                  .replace(/\s+/g, ' ')
+                  .trim()
+              )
+              .filter((line: string) => line.length >= 20 && line.length <= 55)
+              .filter((line: string) => !isIncomplete(line));
+
+            for (const a of aiOnes) {
+              if (suggestions.length >= 5) break;
+              if (!suggestions.includes(a)) suggestions.push(a);
+            }
+          }
+        }
+      } catch { /* AI optional */ }
+
+      const tooSimilar = (a: string, b: string) => {
+        if (a === b) return true;
+        const na = a.replace(/\s+/g, '');
+        const nb = b.replace(/\s+/g, '');
+        if (na.includes(nb) || nb.includes(na)) return na.length > 10 && nb.length > 10;
+        const ta = new Set(na.split(''));
+        const tb = new Set(nb.split(''));
+        let inter = 0;
+        for (const ch of ta) if (tb.has(ch)) inter++;
+        return inter / (ta.size + tb.size - inter || 1) > 0.9;
+      };
+
+      const final: string[] = [];
+      for (const s of suggestions) {
+        const t = s.replace(/\s+/g, ' ').trim();
+        if (t.length < 12 || t.length > 55) continue;
+        if (t.endsWith('-') || t.endsWith('·')) continue;
+        if (final.some((f) => tooSimilar(f, t))) continue;
+        final.push(t);
+        if (final.length >= 5) break;
+      }
+
+      if (final.length === 0 && primary) final.push(primary.slice(0, 55));
+      if (final.length === 0) {
+        return Response.json({
+          _error: '상품명 추천 실패: 원문 상품명을 찾지 못했습니다.',
+          traceId,
+        }, { status: 200 });
+      }
+
+      const shortCode = internal_code.replace(/^onchannel:/i, '');
+      if (room_id) {
         await insertHajunMessage({
           room_id,
           author_type: 'ai',
           author_name: 'HajunAI',
           msg_type: 'answer',
-          content: `상품명 추천 (${internal_code})\n${suggestions.map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}`,
+          content: `상품명 추천 (${shortCode})\n${final.map((s, i) => `${i + 1}. ${s}`).join('\n')}`,
           ref_ids: [],
-          metadata: { entity_type: 'listing_title_suggestion', internal_code, suggestions, decided_by: 'ai_suggest_only' },
+          metadata: {
+            entity_type: 'listing_title_suggestion',
+            internal_code,
+            suggestions: final,
+            decided_by: 'ai_suggest_only',
+          },
         });
       }
-      return Response.json({ payload: { internal_code, suggestions, raw: text }, traceId }, { status: 200 });
+
+      return Response.json({
+        payload: { internal_code, suggestions: final },
+        traceId,
+      }, { status: 200 });
     }
 
     return Response.json({ _error: '알 수 없는 action', traceId }, { status: 200 });
