@@ -75,3 +75,25 @@ export const YARD_LABEL: Record<string, string> = {
   product_validation: '상품검증마당',
   product_listing: '상품등록마당',
 };
+
+/** UI 탭 그룹 — 브라이언풀(본류) vs 창고(상품 검증·등록) */
+export type YardTab = 'brainpool' | 'warehouse';
+
+export const YARD_GROUP: Record<string, YardTab> = {
+  gwanje: 'brainpool',
+  gaebal: 'brainpool',
+  brainpool: 'brainpool',
+  product_validation: 'warehouse',
+  product_listing: 'warehouse',
+};
+
+/** 탭별 표시 순서 */
+export const TAB_YARD_KEYS: Record<YardTab, readonly string[]> = {
+  brainpool: ['gwanje', 'gaebal', 'brainpool'],
+  warehouse: ['product_validation', 'product_listing'],
+};
+
+export const TAB_LABEL: Record<YardTab, string> = {
+  brainpool: '브라이언풀',
+  warehouse: '창고',
+};
