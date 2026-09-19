@@ -64,6 +64,10 @@ const S: Record<string, React.CSSProperties> = {
   refBar: { fontSize: 11, color: 'var(--text2)', background: 'rgba(88,166,255,0.08)', border: '1px solid rgba(88,166,255,0.25)', borderRadius: 6, padding: '8px 10px', marginBottom: 8, display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' },
   linkBtn: { background: 'none', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: 4, padding: '2px 8px', fontSize: 10, cursor: 'pointer', fontFamily: 'JetBrains Mono, monospace' },
   hint: { fontSize: 11, color: 'var(--text3)', marginBottom: 10, lineHeight: 1.5 },
+  refLabel: { fontSize: 10, color: 'var(--text3)', marginBottom: 6, fontFamily: 'JetBrains Mono, monospace' },
+  refChipWrap: { display: 'flex', flexWrap: 'wrap' as const, gap: 6, maxHeight: 88, overflowY: 'auto' as const, marginBottom: 10, padding: '2px 0' },
+  refChip: { fontSize: 11, padding: '5px 10px', borderRadius: 16, border: '1px solid var(--border)', background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
+  refChipOn: { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'rgba(88,166,255,0.12)' },
 };
 
 function fmtTime(iso: string) {
@@ -123,8 +127,7 @@ export default function RoomPage() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [msgType, setMsgType] = useState<MsgType>('understanding');
   const [aiPosting, setAiPosting] = useState(false);
-  const [replyToId, setReplyToId] = useState<string>('');
-  const [replyToPreview, setReplyToPreview] = useState('');
+  const [refIds, setRefIds] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
@@ -231,12 +234,15 @@ export default function RoomPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const clearReply = () => { setReplyToId(''); setReplyToPreview(''); };
+  const clearRefs = () => setRefIds([]);
 
-  const pickReply = (m: HajunMessage) => {
-    setReplyToId(m.id);
-    const prev = (m.content || '').replace(/\s+/g, ' ').slice(0, 80);
-    setReplyToPreview(`${MSG_TYPE_LABEL[m.msg_type as MsgType] || m.msg_type} · ${m.author_name}: ${prev}`);
+  const toggleRef = (id: string) => {
+    setRefIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  };
+
+  const chipLabel = (m: HajunMessage) => {
+    const body = (m.content || '').replace(/\s+/g, ' ').trim();
+    return body.length > 36 ? body.slice(0, 36) + '…' : body || '(빈 메시지)';
   };
 
   const submitContext = async () => {
@@ -251,15 +257,15 @@ export default function RoomPage() {
           author_name: authorName || '여리',
           msg_type: msgType,
           content: content.trim(),
-          ref_ids: replyToId ? [replyToId] : [],
+          ref_ids: refIds,
         }),
       });
       const json = await res.json();
       if (json._error) setErrMsg(json._error);
       else {
         setContent('');
-        clearReply();
-        setOkMsg(replyToId ? '맥락 이어 저장됨' : '저장됨');
+        clearRefs();
+        setOkMsg(refIds.length ? `저장됨 · 참조 ${refIds.length}건` : '저장됨');
         await load();
       }
     } catch (e) {
@@ -273,13 +279,13 @@ export default function RoomPage() {
     try {
       const res = await fetch('/api/hajun?action=ai_respond', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ room_id: room.id, ref_ids: replyToId ? [replyToId] : [] }),
+        body: JSON.stringify({ room_id: room.id, ref_ids: refIds }),
       });
       const json = await res.json();
       if (json._error) setErrMsg(json._error);
       else {
-        setOkMsg(replyToId ? 'HajunAI 답변 저장 (참조 포함)' : 'HajunAI 답변 저장됨');
-        clearReply();
+        setOkMsg(refIds.length ? `HajunAI 답변 · 참조 ${refIds.length}건` : 'HajunAI 답변 저장됨');
+        clearRefs();
         await load();
       }
     } catch (e) {
@@ -343,6 +349,7 @@ export default function RoomPage() {
 
   if (isContextYard) {
     const MSG_TYPES: MsgType[] = ['question', 'understanding', 'answer', 'decision', 'issue', 'doc_injection', 'work_result'];
+    const chipMessages = [...messages].slice(-40).reverse();
     return (
       <div style={S.page}>
         <Sidebar />
@@ -356,13 +363,14 @@ export default function RoomPage() {
             </div>
             <div style={S.title}>{room.name}</div>
             <div style={S.hint}>
-              맥락 방 · 게시글 선택 후 이어가기 · HajunAI 답변에 참조 주입 가능
+              맥락 방 · 아래 칩으로 참조할 이전 메시지를 고른 뒤 남기거나 AI 답변을 요청하세요
             </div>
           </div>
+
           <div style={S.body}>
             {messages.length === 0 && <div style={S.empty}>메시지가 없습니다. 첫 맥락을 남겨 보세요.</div>}
             {messages.map((m) => {
-              const selected = replyToId === m.id;
+              const selected = refIds.includes(m.id);
               return (
                 <div key={m.id} style={{ ...S.msgCard, ...(m.author_type === 'ai' ? S.msgCardAi : {}), ...(selected ? S.msgCardSel : {}) }}>
                   <div style={S.msgTop}>
@@ -378,9 +386,9 @@ export default function RoomPage() {
                       ref: {m.ref_ids.length}건
                     </div>
                   )}
-                  <div style={{ marginTop: 8 }}>
-                    <button type="button" style={S.linkBtn} onClick={() => pickReply(m)}>
-                      {selected ? '선택됨 · 이어가기' : '이어가기'}
+                  <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
+                    <button type="button" style={S.linkBtn} onClick={() => toggleRef(m.id)}>
+                      {selected ? '참조 해제' : '참조에 추가'}
                     </button>
                   </div>
                 </div>
@@ -388,28 +396,75 @@ export default function RoomPage() {
             })}
             <div ref={bottomRef} />
           </div>
+
           <div style={S.compose}>
-            {replyToId && (
-              <div style={S.refBar}>
-                <span>📎 {replyToPreview || replyToId}</span>
-                <button type="button" style={S.linkBtn} onClick={clearReply}>해제</button>
-              </div>
-            )}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-              <input style={{ ...S.input, width: 140 }} value={authorName} onChange={(e) => setAuthorName(e.target.value)} placeholder="작성자" />
-              <select style={{ ...S.select, width: 160, marginBottom: 0 }} value={msgType} onChange={(e) => setMsgType(e.target.value as MsgType)}>
+              <select
+                style={{ ...S.select, width: 140, marginBottom: 0 }}
+                value={msgType}
+                onChange={(e) => setMsgType(e.target.value as MsgType)}
+              >
                 {MSG_TYPES.map((t) => (
                   <option key={t} value={t}>{MSG_TYPE_LABEL[t]}</option>
                 ))}
               </select>
+              <input
+                style={{ ...S.input, width: 120 }}
+                value={authorName}
+                onChange={(e) => setAuthorName(e.target.value)}
+                placeholder="작성자"
+              />
             </div>
-            <textarea style={S.textarea} value={content} onChange={(e) => setContent(e.target.value)} placeholder="맥락 메시지... (종류 선택 후 남기기)" />
+
+            <div style={S.refLabel}>
+              참조할 이전 메시지 선택 (클릭 시 참조 · {refIds.length}건)
+              {refIds.length > 0 && (
+                <button type="button" style={{ ...S.linkBtn, marginLeft: 8 }} onClick={clearRefs}>전체 해제</button>
+              )}
+            </div>
+            {chipMessages.length === 0 ? (
+              <div style={{ ...S.refLabel, marginBottom: 10 }}>아직 참조할 메시지가 없습니다</div>
+            ) : (
+              <div style={S.refChipWrap}>
+                {chipMessages.map((m) => {
+                  const on = refIds.includes(m.id);
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      title={m.content}
+                      style={{ ...S.refChip, ...(on ? S.refChipOn : {}) }}
+                      onClick={() => toggleRef(m.id)}
+                    >
+                      {chipLabel(m)}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <textarea
+              style={S.textarea}
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              placeholder="이 방에 남길 메시지..."
+            />
             <div style={S.btnRow}>
-              <button type="button" style={{ ...S.submitBtn, ...(!content.trim() || posting ? S.submitOff : {}) }} disabled={!content.trim() || posting} onClick={submitContext}>
-                {posting ? '저장 중...' : replyToId ? '이어 남기기' : '방에 남기기'}
+              <button
+                type="button"
+                style={{ ...S.submitBtn, ...(!content.trim() || posting ? S.submitOff : {}) }}
+                disabled={!content.trim() || posting}
+                onClick={submitContext}
+              >
+                {posting ? '저장 중...' : '방에 남기기'}
               </button>
-              <button type="button" style={{ ...S.submitBtn, background: '#39C5CF', ...(aiPosting ? S.submitOff : {}) }} disabled={aiPosting || posting} onClick={askAiContext}>
-                {aiPosting ? 'AI 응답 중...' : replyToId ? '참조로 HajunAI 답변' : 'HajunAI 답변'}
+              <button
+                type="button"
+                style={{ ...S.submitBtn, background: '#39C5CF', ...(aiPosting ? S.submitOff : {}) }}
+                disabled={aiPosting || posting}
+                onClick={askAiContext}
+              >
+                {aiPosting ? 'AI 응답 중...' : 'AI 답변 요청'}
               </button>
             </div>
             {errMsg && <div style={S.errMsg}>⚠ {errMsg}</div>}
