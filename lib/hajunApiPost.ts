@@ -49,7 +49,7 @@ async function callGroqWithFallback(
             model,
             messages: [{ role: 'user', content: prompt }],
             temperature: opts?.temperature ?? 0.4,
-            max_tokens: opts?.max_tokens ?? 700,
+            max_tokens: opts?.max_tokens ?? 1200,
           }),
         });
         if (!res.ok) {
@@ -78,7 +78,7 @@ async function callGroqWithFallback(
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
             generationConfig: {
               temperature: opts?.temperature ?? 0.4,
-              maxOutputTokens: opts?.max_tokens ?? 700,
+              maxOutputTokens: opts?.max_tokens ?? 1200,
             },
           }),
         }
@@ -224,22 +224,51 @@ export async function POST(req: Request) {
     if (action === 'ai_respond') {
       const { room_id, ref_ids = [] } = body as { room_id?: string; ref_ids?: string[] };
       if (!room_id) return Response.json({ _error: 'room_id 필요', traceId }, { status: 200 });
-      if (!GROQ_KEY) return Response.json({ _error: 'GROQ_API_KEY 환경변수 미설정', traceId }, { status: 200 });
-      const messages = await supabaseGet(`hajun_messages?room_id=eq.${room_id}&order=created_at.desc&limit=8`);
-      const thread = [...(messages || [])].reverse();
+      if (!GROQ_KEY && !GEMINI_KEY) {
+        return Response.json({ _error: 'GROQ_API_KEY 또는 GEMINI_API_KEY 필요', traceId }, { status: 200 });
+      }
+      const messages = await supabaseGet(`hajun_messages?room_id=eq.${room_id}&order=created_at.desc&limit=20`);
+      const all = Array.isArray(messages) ? messages : [];
+      const byId = new Map(all.map((m: { id: string }) => [m.id, m]));
+      const refSet = new Set(Array.isArray(ref_ids) ? ref_ids.filter(Boolean) : []);
+      const prioritized: typeof all = [];
+      for (const id of refSet) {
+        const hit = byId.get(id);
+        if (hit) prioritized.push(hit);
+      }
+      for (const m of all) {
+        if (!refSet.has((m as { id: string }).id)) prioritized.push(m);
+      }
+      const thread = [...prioritized].slice(0, 16).reverse();
       const prompt = [
-        '당신은 하준아이 마당의 방에 참여한 AI입니다. 아래 방 기록만 근거로 한국어로 간결하게 답하세요.',
-        '마크다운 목록과 확인되지 않은 추측은 사용하지 마세요.',
-        `참조 메시지 ID: ${Array.isArray(ref_ids) && ref_ids.length ? ref_ids.join(', ') : '없음'}`,
+        '당신은 하준아이 마당의 방에 참여한 AI(HajunAI)입니다.',
+        '아래 방 기록과 참조 메시지만 근거로 한국어로 답하세요.',
+        '문장이 중간에 끊기지 않게 끝까지 완성하세요. 필요하면 여러 문단으로 충분히 설명해도 됩니다.',
+        '확인되지 않은 추측은 하지 마세요. 과도한 마크다운 목록은 피하세요.',
+        refSet.size
+          ? `우선 참조할 메시지 ID: ${[...refSet].join(', ')} — 이 글을 중심으로 답하세요.`
+          : '특정 참조 없음 — 최근 방 기록 전체를 보고 답하세요.',
         '=== 방 기록 ===',
-        thread.map((m: { author_name: string; msg_type: string; content: string }) => `[${m.author_name}/${m.msg_type}] ${m.content}`).join('\n'),
-        '=== 답변 ===',
+        thread
+          .map((m: { id?: string; author_name: string; msg_type: string; content: string }) => {
+            const mark = m.id && refSet.has(m.id) ? '★참조 ' : '';
+            return `${mark}[${m.author_name}/${m.msg_type}] ${m.content}`;
+          })
+          .join('\n'),
+        '=== 답변 (완전한 문장으로 끝낼 것) ===',
       ].join('\n');
-      const aiResult = await callGroqWithFallback(prompt, { temperature: 0.4, max_tokens: 700 });
+      const aiResult = await callGroqWithFallback(prompt, { temperature: 0.35, max_tokens: 1800 });
       if (aiResult._error || !aiResult.text) {
         return Response.json({ _error: `AI 호출 실패: ${aiResult._error || '빈 응답'}`, traceId }, { status: 200 });
       }
-      const saved = await insertHajunMessage({ room_id, author_type: 'ai', author_name: 'HajunAI', msg_type: 'answer', content: aiResult.text, ref_ids });
+      const saved = await insertHajunMessage({
+        room_id,
+        author_type: 'ai',
+        author_name: 'HajunAI',
+        msg_type: 'answer',
+        content: aiResult.text.trim(),
+        ref_ids: Array.isArray(ref_ids) ? ref_ids : [],
+      });
       if (saved._error) return Response.json({ _error: saved._error, traceId }, { status: 200 });
       return Response.json({ payload: saved.data?.[0] || null, traceId }, { status: 200 });
     }
@@ -288,219 +317,8 @@ export async function POST(req: Request) {
       return Response.json({ _error: 'synthesize_context를 사용하세요.', traceId }, { status: 200 });
     }
 
-    if (action === 'suggest_listing_title') {
-      const { internal_code, room_id } = body as { internal_code?: string; room_id?: string };
-      if (!internal_code || typeof internal_code !== 'string') {
-        return Response.json({ _error: 'internal_code 필요', traceId }, { status: 200 });
-      }
-
-      const productMsgs = await getProductMessages(internal_code);
-      if (productMsgs?._error) {
-        return Response.json({ _error: productMsgs._error, traceId }, { status: 200 });
-      }
-      const samples = (Array.isArray(productMsgs) ? productMsgs : []).slice(0, 5);
-
-      const nameCandidates: string[] = [];
-      for (const m of samples) {
-        const meta = (m.metadata || {}) as Record<string, unknown>;
-        for (const key of ['name', 'product_name', 'title_draft'] as const) {
-          const v = meta[key];
-          if (typeof v === 'string' && v.trim()) nameCandidates.push(v.trim());
-        }
-        const c = typeof m.content === 'string' ? m.content : '';
-        const fromContent =
-          c.match(/상품명\s*[:：]?\s*([^\n]+)/)?.[1]?.trim() ||
-          c.match(/제품명\s*[:：]?\s*([^\n]+)/)?.[1]?.trim() ||
-          c.match(/제품명\s*\n([^\n]+)/)?.[1]?.trim() ||
-          '';
-        if (fromContent) nameCandidates.push(fromContent);
-      }
-
-      const cleanBase = (s: string) =>
-        s
-          .replace(/온채널|onchannel/gi, '')
-          .replace(/\bCH\d{5,}\b/gi, '')
-          .replace(/[|｜]/g, ' ')
-          .replace(/\s*[-–—·]+\s*$/g, '')
-          .replace(/^\s*[-–—·]+\s*/g, '')
-          .replace(/\s{2,}/g, ' ')
-          .trim();
-
-      const bases = nameCandidates
-        .map(cleanBase)
-        .filter((s) => s.length >= 6)
-        .filter((s, i, arr) => arr.indexOf(s) === i);
-
-      const primary = bases[0] || '';
-      const productText = samples
-        .map((m: { content?: string }) => (m.content || '').slice(0, 1200))
-        .join('\n')
-        .slice(0, 3000);
-
-      const buildVariants = (src: string): string[] => {
-        const out: string[] = [];
-        const ph = src
-          .split(/\s+/)
-          .map((p) => p.replace(/[-\/·–—]+$/g, '').replace(/^[-/·–—]+/g, '').trim())
-          .filter((p) => p.length >= 1 && !/^(온채널|onchannel)$/i.test(p));
-        if (ph.length === 0) return out;
-
-        const push = (arr: string[]) => {
-          const s = arr.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
-          if (s.length >= 14 && s.length <= 55 && !out.includes(s)) out.push(s);
-        };
-
-        push(ph);
-
-        if (ph.length >= 4) push([...ph.slice(2), ...ph.slice(0, 2)]);
-
-        const setIdx = ph.findIndex((p) => /세트|종|매입|개입|구성/.test(p));
-        if (setIdx > 0) push([ph[setIdx], ...ph.filter((_, i) => i !== setIdx)]);
-
-        const useIdx = ph.findIndex((p) => /(용|차량|남성|여성|유아|아동)/.test(p));
-        if (useIdx > 0) push([ph[useIdx], ...ph.filter((_, i) => i !== useIdx)]);
-
-        if (ph.length >= 6) {
-          push([...ph.slice(0, 3), ...ph.slice(-3)]);
-          push([...ph.slice(0, 4), ...ph.slice(-2)]);
-        }
-
-        if (ph.length >= 6) push(ph.slice(0, 6));
-        if (ph.length >= 5) push(ph.slice(0, 5));
-
-        return out;
-      };
-
-      let suggestions = buildVariants(primary);
-      for (const b of bases.slice(1, 3)) {
-        for (const v of buildVariants(b)) {
-          if (suggestions.length >= 6) break;
-          if (!suggestions.includes(v)) suggestions.push(v);
-        }
-      }
-
-      try {
-        if (primary && GROQ_KEY) {
-          const prompt = [
-            '쿠팡 상품명 카피라이터. 아래 원문 상품명을 바탕으로 서로 다른 판매 상품명 4개.',
-            '규칙: 28~50자, 명사 나열, 끝말 완전, 원문 단어만 사용, 서로 다른 순서/강조.',
-            '금지: 원문 앞부분만 자르기, 온채널, 코드, 잘린 단어.',
-            '출력: 1. 2. 3. 4. 만.',
-            `원문: ${primary}`,
-            productText ? `부가: ${productText.slice(0, 800)}` : '',
-          ].filter(Boolean).join('\n');
-
-          const models = [
-            GROQ_MODEL,
-            'openai/gpt-oss-120b',
-            'qwen/qwen3-32b',
-            'llama-3.1-8b-instant',
-          ].filter(Boolean) as string[];
-
-          let aiText = '';
-          for (const model of models) {
-            try {
-              const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
-                body: JSON.stringify({
-                  model,
-                  messages: [{ role: 'user', content: prompt }],
-                  temperature: 0.7,
-                  max_tokens: 400,
-                }),
-              });
-              if (!res.ok) continue;
-              const data = await res.json();
-              const t = (data.choices?.[0]?.message?.content || '').trim();
-              if (t) { aiText = t; break; }
-            } catch { /* next */ }
-          }
-
-          if (aiText) {
-            const isIncomplete = (s: string) =>
-              /(임시\s*연락|팬티\s*드|지압\s*3|지압\s*-|[이가을를의사에\-]$)/.test(s) ||
-              s.endsWith('-');
-
-            const aiOnes = aiText
-              .split('\n')
-              .map((line: string) =>
-                line
-                  .replace(/^\s*\d+[\.\)\-\:]\s*/, '')
-                  .replace(/["'`]/g, '')
-                  .replace(/온채널|onchannel/gi, '')
-                  .replace(/\s+/g, ' ')
-                  .trim()
-              )
-              .filter((line: string) => line.length >= 20 && line.length <= 55)
-              .filter((line: string) => !isIncomplete(line));
-
-            for (const a of aiOnes) {
-              if (suggestions.length >= 5) break;
-              if (!suggestions.includes(a)) suggestions.push(a);
-            }
-          }
-        }
-      } catch { /* AI optional */ }
-
-      const tooSimilar = (a: string, b: string) => {
-        if (a === b) return true;
-        const na = a.replace(/\s+/g, '');
-        const nb = b.replace(/\s+/g, '');
-        if (na.includes(nb) || nb.includes(na)) return na.length > 10 && nb.length > 10;
-        const ta = new Set(na.split(''));
-        const tb = new Set(nb.split(''));
-        let inter = 0;
-        for (const ch of ta) if (tb.has(ch)) inter++;
-        return inter / (ta.size + tb.size - inter || 1) > 0.9;
-      };
-
-      const final: string[] = [];
-      for (const s of suggestions) {
-        let t = s.replace(/\s+/g, ' ').replace(/온채널|onchannel/gi, '').trim();
-        t = t.replace(/\s*[-–—·]+\s*$/g, '').trim();
-        if (t.length < 14 || t.length > 55) continue;
-        if (/[-–—·]$/.test(t)) continue;
-        if (final.some((f) => tooSimilar(f, t))) continue;
-        final.push(t);
-        if (final.length >= 5) break;
-      }
-
-      if (final.length === 0 && primary) final.push(primary.slice(0, 55));
-      if (final.length === 0) {
-        return Response.json({
-          _error: '상품명 추천 실패: 원문 상품명을 찾지 못했습니다.',
-          traceId,
-        }, { status: 200 });
-      }
-
-      const shortCode = internal_code.replace(/^onchannel:/i, '');
-      if (room_id) {
-        await insertHajunMessage({
-          room_id,
-          author_type: 'ai',
-          author_name: 'HajunAI',
-          msg_type: 'answer',
-          content: `상품명 추천 (${shortCode})\n${final.map((s, i) => `${i + 1}. ${s}`).join('\n')}`,
-          ref_ids: [],
-          metadata: {
-            entity_type: 'listing_title_suggestion',
-            internal_code,
-            suggestions: final,
-            decided_by: 'ai_suggest_only',
-          },
-        });
-      }
-
-      return Response.json({
-        payload: { internal_code, suggestions: final },
-        traceId,
-      }, { status: 200 });
-    }
-
-    return Response.json({ _error: '알 수 없는 action', traceId }, { status: 200 });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return Response.json({ _error: msg, traceId }, { status: 500 });
+    return Response.json({ _error: `Unknown POST action: ${action}`, traceId }, { status: 200 });
+  } catch (e) {
+    return Response.json({ _error: e instanceof Error ? e.message : String(e), traceId }, { status: 200 });
   }
 }
