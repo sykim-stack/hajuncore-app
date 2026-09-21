@@ -81,11 +81,15 @@ function extractProductName(content: string, metadata?: Record<string, unknown> 
 function displayCode(code: string) {
   return (code || '').replace(/^onchannel:/, '') || '코드없음';
 }
+function parseImageUrls(text: string): string[] {
+  return text.split(/\n+/).map((s) => s.trim()).filter((s) => /^https?:\/\//i.test(s));
+}
 
 type Cand = { id: string; content: string; metadata?: Record<string, unknown> | null };
 
 export default function ProductRoom({ yardKey, roomKey }: { yardKey: string; roomKey: string }) {
   const isValidationRoom = yardKey === 'product_validation' && roomKey === 'product_validation';
+  const isDiscoveryRoom = yardKey === 'product_validation' && roomKey === 'product_discovery';
   const isListingQueueRoom = yardKey === 'product_listing' && roomKey === 'listing_queue';
   const isListingContentRoom = yardKey === 'product_listing' && roomKey === 'listing_content';
 
@@ -103,6 +107,10 @@ export default function ProductRoom({ yardKey, roomKey }: { yardKey: string; roo
   const [candidateCount, setCandidateCount] = useState(0);
   const [candidateError, setCandidateError] = useState('');
   const [titleDraft, setTitleDraft] = useState('');
+  const [salePrice, setSalePrice] = useState('');
+  const [imageUrlsText, setImageUrlsText] = useState('');
+  const [detailText, setDetailText] = useState('');
+  const [channelCafe24, setChannelCafe24] = useState('');
   const [titleSuggestions, setTitleSuggestions] = useState<string[]>([]);
   const [suggesting, setSuggesting] = useState(false);
   const [thumbStatus, setThumbStatus] = useState<ContentWorkStatus>('pending');
@@ -214,6 +222,15 @@ export default function ProductRoom({ yardKey, roomKey }: { yardKey: string; roo
 
   useEffect(() => { load(); }, [load]);
 
+  const selectForValidation = (message: HajunMessage) => {
+    const code = typeof message.metadata?.internal_code === 'string' ? message.metadata.internal_code : '';
+    if (!code) return;
+    try {
+      sessionStorage.setItem('hajun_validation_pick', JSON.stringify({ id: message.id, internal_code: code }));
+    } catch { /* ignore */ }
+    window.location.href = '/hajun/product_validation/product_validation';
+  };
+
   const submitDecision = async (decision: DecisionValue) => {
     if (!room || posting || !currentCode) { setErrMsg('상품을 선택하세요.'); return; }
     setPosting(true); setErrMsg(''); setOkMsg('');
@@ -307,7 +324,11 @@ export default function ProductRoom({ yardKey, roomKey }: { yardKey: string; roo
           ref_ids: pickedCandidateId ? [pickedCandidateId] : [],
           metadata: {
             entity_type: 'listing_content', internal_code: currentCode, status: 'editing',
-            title_draft: title || null, thumbnail_status: thumbStatus, detail_status: detailStatus, target_malls: [],
+            title_draft: title || null,
+            sale_price: salePrice.trim() ? Number(salePrice.replace(/[^0-9]/g, '')) || salePrice.trim() : null,
+            image_urls: parseImageUrls(imageUrlsText),
+            detail_text: detailText.trim() || null,
+            thumbnail_status: thumbStatus, detail_status: detailStatus, target_malls: [],
           },
         }),
       });
@@ -338,6 +359,9 @@ export default function ProductRoom({ yardKey, roomKey }: { yardKey: string; roo
             entity_type: 'listing_content', internal_code: currentCode,
             status: nxt === 'approved' ? 'ready' : 'editing',
             title_draft: titleDraft.trim() || null,
+            sale_price: salePrice.trim() ? Number(salePrice.replace(/[^0-9]/g, '')) || salePrice.trim() : null,
+            image_urls: parseImageUrls(imageUrlsText),
+            detail_text: detailText.trim() || null,
             thumbnail_status: nextThumb, detail_status: nextDetail, target_malls: [], work_kind: kind,
           },
         }),
@@ -355,19 +379,47 @@ export default function ProductRoom({ yardKey, roomKey }: { yardKey: string; roo
   const publishListing = async (message: HajunMessage) => {
     const code = typeof message.metadata?.internal_code === 'string' ? message.metadata.internal_code : currentCode;
     if (!code || posting) return;
-    setPosting(true); setErrMsg('');
+    const title = (titleDraft || (typeof message.metadata?.title_draft === 'string' ? message.metadata.title_draft : '') || '').trim();
+    const priceRaw = salePrice.trim() || (message.metadata?.sale_price != null ? String(message.metadata.sale_price) : '');
+    const priceNum = Number(String(priceRaw).replace(/[^0-9]/g, ''));
+    const thumb = normalizeWorkStatus(message.metadata?.thumbnail_status ?? thumbStatus);
+    const detail = normalizeWorkStatus(message.metadata?.detail_status ?? detailStatus);
+    if (!title) { setErrMsg('게시 게이트: 상품명(title_draft)이 필요합니다.'); return; }
+    if (!priceNum || priceNum <= 0) { setErrMsg('게시 게이트: 판매가(sale_price)가 필요합니다.'); return; }
+    if (thumb !== 'approved') { setErrMsg('게시 게이트: 이미지(thumbnail)가 승인(approved)이어야 합니다.'); return; }
+    const detailIncluded = detail === 'approved';
+    setPosting(true); setErrMsg(''); setOkMsg('');
     try {
       const res = await fetch('/api/hajun?action=post_message', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           yard_key: 'product_listing', room_key: 'listing_published',
           author_type: 'human', author_name: authorName || '게시확인', msg_type: 'work_result',
-          content: `쇼핑몰 게시 완료 확인: ${code}${titleDraft ? ` / ${titleDraft}` : ''}`,
+          content: `쇼핑몰 게시 완료 확인: ${code} / ${title} / ${priceNum}원` + (detailIncluded ? ' (상세 포함)' : ' (상세 미포함)'),
           ref_ids: [message.id],
           metadata: {
-            entity_type: 'listing_published', internal_code: code, status: 'published',
-            title_draft: titleDraft || message.metadata?.title_draft || null,
+            entity_type: 'listing_published',
+            internal_code: code,
+            status: 'published',
+            title_draft: title,
+            sale_price: priceNum,
+            image_urls: parseImageUrls(imageUrlsText).length
+              ? parseImageUrls(imageUrlsText)
+              : (Array.isArray(message.metadata?.image_urls) ? message.metadata.image_urls : []),
+            detail_text: detailText.trim()
+              || (typeof message.metadata?.detail_text === 'string' ? message.metadata.detail_text : null),
+            thumbnail_status: thumb,
+            detail_status: detail,
+            detail_included: detailIncluded,
+            channel_ids: {
+              ...(channelCafe24.trim() ? { cafe24: channelCafe24.trim() } : {}),
+            },
+            target_malls: channelCafe24.trim()
+              ? ['cafe24']
+              : (Array.isArray(message.metadata?.target_malls) ? message.metadata.target_malls : []),
             source_content_id: message.id,
+            published_by: 'human',
+            published_at: new Date().toISOString(),
           },
         }),
       });
@@ -405,6 +457,33 @@ export default function ProductRoom({ yardKey, roomKey }: { yardKey: string; roo
       setPickedCode(code);
       const td = typeof c?.metadata?.title_draft === 'string' ? c.metadata.title_draft : '';
       if (td) setTitleDraft(td);
+      const sp = c?.metadata?.sale_price;
+      if (typeof sp === 'number' && sp > 0) setSalePrice(String(sp));
+      else if (typeof sp === 'string' && sp.trim()) setSalePrice(sp.trim());
+      const imgs = c?.metadata?.image_urls;
+      if (Array.isArray(imgs) && imgs.length) setImageUrlsText(imgs.filter((u: unknown) => typeof u === 'string').join('\n'));
+      const dt = c?.metadata?.detail_text;
+      if (typeof dt === 'string' && dt.trim()) setDetailText(dt);
+      // also restore from latest listing_content in room messages
+      if (code) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const mm = messages[i];
+          if (mm.metadata?.entity_type !== 'listing_content') continue;
+          if (mm.metadata?.internal_code !== code) continue;
+          setThumbStatus(normalizeWorkStatus(mm.metadata?.thumbnail_status));
+          setDetailStatus(normalizeWorkStatus(mm.metadata?.detail_status));
+          const t2 = mm.metadata?.title_draft;
+          if (typeof t2 === 'string' && t2.trim()) setTitleDraft(t2);
+          const sp2 = mm.metadata?.sale_price;
+          if (typeof sp2 === 'number' && sp2 > 0) setSalePrice(String(sp2));
+          else if (typeof sp2 === 'string' && sp2.trim()) setSalePrice(sp2.trim());
+          const imgs2 = mm.metadata?.image_urls;
+          if (Array.isArray(imgs2) && imgs2.length) setImageUrlsText(imgs2.filter((u: unknown) => typeof u === 'string').join('\n'));
+          const dt2 = mm.metadata?.detail_text;
+          if (typeof dt2 === 'string' && dt2.trim()) setDetailText(dt2);
+          break;
+        }
+      }
     }}>
       <option value="">상품 선택...</option>
       {candidates.map((c) => {
@@ -445,6 +524,9 @@ export default function ProductRoom({ yardKey, roomKey }: { yardKey: string; roo
                 </div>
                 <div style={S.content}>{m.content}</div>
                 <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {isDiscoveryRoom && entity === 'product_candidate' && (
+                    <button type="button" style={{ ...S.submitBtn, background: '#3FB950' }} onClick={() => selectForValidation(m)}>검증 선택</button>
+                  )}
                   {isListingQueueRoom && entity === 'listing_draft' && (
                     <button type="button" style={{ ...S.submitBtn, background: '#8B5CF6' }} onClick={() => startContent(m)}>콘텐츠 작업 시작</button>
                   )}
@@ -495,6 +577,14 @@ export default function ProductRoom({ yardKey, roomKey }: { yardKey: string; roo
                 </div>
               )}
               <input style={{ ...S.input, marginBottom: 8 }} value={titleDraft} onChange={(e) => setTitleDraft(e.target.value)} placeholder="상품명 초안" />
+              <input style={{ ...S.input, marginBottom: 8, width: 180 }} value={salePrice} onChange={(e) => setSalePrice(e.target.value.replace(/[^0-9]/g, ''))} placeholder="판매가 (원)" inputMode="numeric" />
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6 }}>이미지 URL (한 줄에 하나, https://…) — 바이너리 첨부 금지</div>
+              <textarea style={{ ...S.textarea, minHeight: 56, marginBottom: 8 }} value={imageUrlsText} onChange={(e) => setImageUrlsText(e.target.value)} placeholder={"https://example.com/thumb.jpg\nhttps://example.com/detail1.jpg"} />
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6 }}>상세 본문 (detail_text)</div>
+              <textarea style={{ ...S.textarea, minHeight: 90, marginBottom: 8 }} value={detailText} onChange={(e) => setDetailText(e.target.value)} placeholder="판매용 상세 설명 (원문 복제 금지, 재구성)" />
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6 }}>채널 상품번호 (게시 시 channel_ids)</div>
+              <input style={{ ...S.input, marginBottom: 8, width: 220 }} value={channelCafe24} onChange={(e) => setChannelCafe24(e.target.value.trim())} placeholder="cafe24 product_no (선택)" />
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 8 }}>1차 게시 게이트: 상품명 + 판매가 + 이미지 승인 + 사람 게시</div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
                 <div style={{ fontSize: 12, color: 'var(--text2)' }}>
                   이미지: <strong>{CONTENT_STATUS_LABEL[thumbStatus]}</strong>
@@ -524,6 +614,7 @@ export default function ProductRoom({ yardKey, roomKey }: { yardKey: string; roo
               <div style={S.decisionHint}>draft 카드에서 「콘텐츠 작업 시작」을 누르면 콘텐츠 방으로 이동합니다.</div>
               {productSelect}
               <input style={{ ...S.input, marginTop: 8 }} value={titleDraft} onChange={(e) => setTitleDraft(e.target.value)} placeholder="상품명 초안 (선택)" />
+              <input style={{ ...S.input, marginTop: 8, width: 180 }} value={salePrice} onChange={(e) => setSalePrice(e.target.value.replace(/[^0-9]/g, ''))} placeholder="판매가 (원, 선택)" inputMode="numeric" />
             </div>
           )}
           <input style={{ ...S.input, width: 160, marginBottom: 8 }} value={authorName} onChange={(e) => setAuthorName(e.target.value)} placeholder="작성자" />
