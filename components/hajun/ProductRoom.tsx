@@ -38,7 +38,7 @@ const S: Record<string, React.CSSProperties> = {
   header: { padding: '16px 28px 14px', borderBottom: '1px solid var(--border)', background: 'var(--bg2)', flexShrink: 0 },
   crumb: { fontSize: 12, color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace', marginBottom: 6 },
   title: { fontSize: 20, fontWeight: 700 },
-  body: { flex: 1, overflowY: 'auto', padding: '20px 24px', maxWidth: 760 },
+  body: { flex: 1, overflowY: 'auto', padding: '20px 24px', maxWidth: 760, minHeight: 0 },
   msgCard: { marginBottom: 16, padding: 14, background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' },
   msgCardAi: { borderLeft: '3px solid #39C5CF' },
   msgTop: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
@@ -46,7 +46,8 @@ const S: Record<string, React.CSSProperties> = {
   author: { fontSize: 12, fontWeight: 600 },
   time: { fontSize: 10, color: 'var(--text3)', marginLeft: 'auto', fontFamily: 'JetBrains Mono, monospace' },
   content: { fontSize: 13, lineHeight: 1.65, whiteSpace: 'pre-wrap', wordBreak: 'break-word' as const },
-  compose: { borderTop: '1px solid var(--border)', background: 'var(--bg2)', padding: '14px 24px 18px', flexShrink: 0 },
+  // 콘텐츠 작업 폼이 길 때 잘리지 않도록 자체 스크롤. flexShrink:0 유지하되 maxHeight로 상한.
+  compose: { borderTop: '1px solid var(--border)', background: 'var(--bg2)', padding: '14px 24px 18px', flexShrink: 0, maxHeight: '58vh', overflowY: 'auto' },
   input: { background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', padding: '7px 10px', fontSize: 12, outline: 'none', width: '100%' },
   select: { background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', padding: '7px 10px', fontSize: 12, outline: 'none', width: '100%', marginBottom: 10 },
   textarea: { width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', padding: '10px 14px', fontSize: 13, outline: 'none', resize: 'vertical' as const, minHeight: 70, marginBottom: 8 },
