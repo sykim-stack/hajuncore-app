@@ -160,6 +160,60 @@ export default function ContextRoom({ yardKey, roomKey }: { yardKey: string; roo
                   <span style={S.time}>{fmtTime(m.created_at)}</span>
                 </div>
                 <div style={S.content}>{m.content}</div>
+                {m.media_refs && m.media_refs.length > 0 && (
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 8, fontFamily: 'JetBrains Mono, monospace' }}>
+                      CoreNull 원본 미디어 · {m.media_refs.length}건
+                    </div>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+                        gap: 6,
+                        maxHeight: 360,
+                        overflowY: 'auto',
+                        paddingRight: 2,
+                      }}
+                    >
+                      {m.media_refs.map((media) => {
+                        const imageUrl = media.thumbnail_url || media.file_url || '';
+                        const externalUrl = media.video_url || (media.youtube_id ? `https://www.youtube.com/watch?v=${media.youtube_id}` : '');
+                        return (
+                          <a
+                            key={media.id}
+                            href={externalUrl || imageUrl || '#'}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={media.content || media.event_tag || 'CoreNull 원본 미디어'}
+                            style={{
+                              display: 'block',
+                              minWidth: 0,
+                              aspectRatio: '1 / 1',
+                              borderRadius: 6,
+                              overflow: 'hidden',
+                              background: 'var(--bg3)',
+                              border: '1px solid var(--border)',
+                              textDecoration: 'none',
+                            }}
+                          >
+                            {imageUrl ? (
+                              <img
+                                src={imageUrl}
+                                alt={media.content || media.event_tag || 'CoreNull 원본 미디어'}
+                                loading="lazy"
+                                style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                              />
+                            ) : (
+                              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 8, textAlign: 'center', color: 'var(--text2)', fontSize: 10 }}>
+                                {media.video_platform || media.media_type || '미디어'}
+                              </div>
+                            )}
+                          </a>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 <div style={{ marginTop: 8 }}>
                   <button type="button"
                     style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: 4, padding: '2px 8px', fontSize: 10, cursor: 'pointer', fontFamily: 'JetBrains Mono, monospace' }}
