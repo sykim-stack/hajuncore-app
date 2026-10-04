@@ -29,6 +29,22 @@ export type HajunRoom = {
   created_at: string;
 };
 
+export type HajunMediaRef = {
+  id: string;
+  media_type?: string | null;
+  file_url?: string | null;
+  thumbnail_url?: string | null;
+  youtube_id?: string | null;
+  event_tag?: string | null;
+  content?: string | null;
+  event_date?: string | null;
+  is_public?: boolean | null;
+  video_url?: string | null;
+  video_platform?: string | null;
+  content_type?: string | null;
+  created_at?: string | null;
+};
+
 export type HajunMessage = {
   id: string;
   room_id: string;
@@ -39,6 +55,8 @@ export type HajunMessage = {
   ref_ids: string[];
   metadata?: Record<string, unknown> | null;
   created_at: string;
+  /** View-only resolution of ref_ids when metadata.source === 'corenull.media'. */
+  media_refs?: HajunMediaRef[];
 };
 
 export type HajunRoomWithMessages = HajunRoom & { messages: HajunMessage[] };
