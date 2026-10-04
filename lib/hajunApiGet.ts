@@ -14,6 +14,57 @@ import {
   supabaseGet,
 } from '@/lib/hajunApiCore';
 
+
+type CoreNullMediaRow = {
+  id: string;
+  media_type?: string | null;
+  file_url?: string | null;
+  thumbnail_url?: string | null;
+  youtube_id?: string | null;
+  event_tag?: string | null;
+  content?: string | null;
+  event_date?: string | null;
+  is_public?: boolean | null;
+  video_url?: string | null;
+  video_platform?: string | null;
+  content_type?: string | null;
+  created_at?: string | null;
+};
+
+async function attachCoreNullMedia(messages: Array<Record<string, unknown>>) {
+  const mediaMessageIds = messages
+    .filter((m) => (m.metadata as Record<string, unknown> | null | undefined)?.source === 'corenull.media')
+    .flatMap((m) => Array.isArray(m.ref_ids) ? m.ref_ids : [])
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+
+  const mediaIds = [...new Set(mediaMessageIds)];
+  if (mediaIds.length === 0) return messages;
+
+  const mediaRows: CoreNullMediaRow[] = [];
+  // Keep each REST request comfortably bounded; PostgREST supports id=in.(...).
+  for (let i = 0; i < mediaIds.length; i += 100) {
+    const chunk = mediaIds.slice(i, i + 100);
+    const rows = await supabaseGet(
+      `media?select=id,media_type,file_url,thumbnail_url,youtube_id,event_tag,content,event_date,is_public,video_url,video_platform,content_type,created_at&id=in.(${chunk.join(',')})`,
+      'corenull'
+    );
+    if (Array.isArray(rows)) mediaRows.push(...(rows as CoreNullMediaRow[]));
+  }
+
+  const byId = new Map(mediaRows.map((row) => [row.id, row]));
+  return messages.map((message) => {
+    const metadata = message.metadata as Record<string, unknown> | null | undefined;
+    if (metadata?.source !== 'corenull.media') return message;
+    const refs = Array.isArray(message.ref_ids) ? message.ref_ids : [];
+    return {
+      ...message,
+      media_refs: refs
+        .filter((id): id is string => typeof id === 'string')
+        .map((id) => byId.get(id))
+        .filter((row): row is CoreNullMediaRow => Boolean(row)),
+    };
+  });
+};
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const action = searchParams.get('action');
@@ -97,7 +148,8 @@ export async function GET(req: Request) {
       const room = await supabaseGet(`hajun_rooms?id=eq.${roomId}&limit=1`);
       if (!room?.length) return Response.json({ _error: `방을 찾을 수 없습니다: ${roomId}` }, { status: 200 });
       const messages = await supabaseGet(`hajun_messages?room_id=eq.${roomId}&order=created_at.asc`);
-      return Response.json({ payload: { room: room[0], messages }, traceId: createTraceId() });
+      const enrichedMessages = await attachCoreNullMedia(Array.isArray(messages) ? messages : []);
+      return Response.json({ payload: { room: room[0], messages: enrichedMessages }, traceId: createTraceId() });
     }
 
     if (action === 'view_livingroom' || action === 'view_yard') {
