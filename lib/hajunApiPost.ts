@@ -22,6 +22,7 @@ import {
   supabasePatch,
   getProductMessages,
 } from '@/lib/hajunApiCore';
+import { evaluateHermesRule, formatHermesHint } from '@/lib/hermesRule';
 
 async function callGroqWithFallback(
   prompt: string,
@@ -293,7 +294,22 @@ export async function POST(req: Request) {
       const [contextSummary, mindWorldSummary, opportunities, understandingText] = await Promise.all([
         fetchContextSummary(), fetchMindWorldSummary(), fetchOpportunities(owner_key), fetchUnderstanding(),
       ]);
-      const systemPrompt = `당신은 HajunAI입니다. 챗봇이 아닙니다.\n마당에 쌓인 원본을 이해하고 사람과 말합니다.\n근거 없는 사실 금지. 한국어만. 마크다운 금지.\n\n개발 맥락:\n${contextSummary}\n\nMindWorld:\n${mindWorldSummary}\n\n이해:\n${understandingText || '없음'}`;
+
+      // Hermes Phase 0 — 판단·제안만. 실행 금지 (ADR-HERMES-000)
+      const hermesJudgment = evaluateHermesRule({
+        utterance: message.trim(),
+        understanding: understandingText || null,
+      });
+      const hermesHint = formatHermesHint(hermesJudgment);
+
+      const systemPrompt =
+        `당신은 HajunAI입니다. 챗봇이 아닙니다.\n` +
+        `마당에 쌓인 원본을 이해하고 사람과 말합니다.\n` +
+        `근거 없는 사실 금지. 한국어만. 마크다운 금지.\n\n` +
+        `개발 맥락:\n${contextSummary}\n\n` +
+        `MindWorld:\n${mindWorldSummary}\n\n` +
+        `이해:\n${understandingText || '없음'}` +
+        hermesHint;
       const groqResult = await callGroq(systemPrompt, message.trim(), history);
       if (groqResult._error) return Response.json({ _error: groqResult._error, traceId }, { status: 200 });
       const { reply, observations } = parseReply(groqResult.text || '');
@@ -304,7 +320,16 @@ export async function POST(req: Request) {
         summary: reply.slice(0, 100),
         keywords: ['chat', 'hajunai'],
       });
-      return Response.json({ reply, observations, traceId });
+      return Response.json({
+        reply,
+        observations,
+        hermes: {
+          hasActionUnit: hermesJudgment.hasActionUnit,
+          candidates: hermesJudgment.candidates,
+          primary: hermesJudgment.primary,
+        },
+        traceId,
+      });
     }
 
     if (action === 'synthesize_context') {
