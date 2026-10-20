@@ -9,10 +9,12 @@
  *
  * 기준 사례 5문장 (수용 기준):
  * - 안녕 → 없음 / 보류
- * - 이건 중요해 → 있음 / 이해갱신 (+확인질문)
+ * - 이건 중요해 → 있음 / 이해갱신 + 확인질문
  * - 전에 말한 것과 달라 → 있음 / 이해갱신 + 연결 + 확인질문
  * - 이건 기록해줘 → 있음 / 남김
  * - 잘 모르겠어 → 있음 / 확인질문 + 보류
+ *
+ * 일반 서술(예: 날씨)은 변화 신호 없으면 Action Unit 없음.
  */
 
 /** Phase 0 고정 — 5후보만. 추가 금지. */
@@ -57,7 +59,7 @@ export function evaluateHermesRule(input: HermesInput): HermesJudgment {
     return noUnit('상품 마당 제외');
   }
 
-  // ② 변화 (Change)
+  // ② 변화 (Change) — 명시 신호만. 길이만으로 변화 인정 금지.
   const hasChange = detectChange(text, understanding);
   if (!hasChange) return noUnit('변화 없음');
 
@@ -65,10 +67,12 @@ export function evaluateHermesRule(input: HermesInput): HermesJudgment {
   const hasNeed = detectNeed(text);
   if (!hasNeed) return noUnit('필요 없음');
 
-  // ④ 방향 (Direction) — 5후보 중 하나라도 매핑 가능하면 true
+  // ④ 방향 (Direction)
   const candidates = mapCandidates(text, understanding, input.related_refs);
-  if (candidates.length === 0) {
-    return noUnit('방향 표현 불가');
+  // 보류만 있으면 방향 있는 Action Unit으로 보지 않음
+  const actionable = candidates.filter((c) => c !== '보류');
+  if (actionable.length === 0) {
+    return noUnit('방향 없음 (보류만)');
   }
 
   // ⑤ Action Unit 발생
@@ -109,8 +113,11 @@ function isChitchat(text: string): boolean {
   return greetings.some((g) => t === g || t.startsWith(g));
 }
 
-function detectChange(text: string, understanding: string): boolean {
-  // '중요해'는 '하'+'여' 축약이라 /중요하/가 아니라 /중요/로 매칭
+/**
+ * 변화 신호만 인정.
+ * 이전 버전 길이 기반(≥8) 인정이 날씨 등 false positive를 만들었음.
+ */
+function detectChange(text: string, _understanding: string): boolean {
   const changeSignals = [
     /중요/,
     /달라/,
@@ -120,21 +127,21 @@ function detectChange(text: string, understanding: string): boolean {
     /갱신/,
     /기록해/,
     /남겨/,
+    /저장해/,
+    /적어/,
+    /남길/,
     /전에\s*말한/,
     /이전/,
     /모르겠어/,
     /확인/,
     /연결/,
+    /관련/,
+    /\?/,
   ];
-  if (changeSignals.some((re) => re.test(text))) return true;
-  // 이해와 내용이 겹치지 않는 새로운 의미 있는 문장
-  if (understanding && text.length >= 8) return true;
-  if (!understanding && text.length >= 6) return true;
-  return false;
+  return changeSignals.some((re) => re.test(text));
 }
 
 function detectNeed(text: string): boolean {
-  // 단순 감탄/완료 보고만 있으면 false
   const noNeed = [/^(알겠어|응|네|ㅇㅋ|ok|됐어|알겠음)$/i];
   if (noNeed.some((re) => re.test(text.trim()))) return false;
   return true;
@@ -152,13 +159,16 @@ function mapCandidates(
     out.push('남김');
   }
 
-  // 이해 갱신 ('중요해' 축약 대응: 중요)
+  // 이해 갱신
   if (/달라|다르|바꾸|수정|갱신|중요|전에\s*말한/.test(text)) {
     out.push('이해갱신');
   }
 
-  // 확인 질문
-  if (/모르겠어|확인|뭐야|어떤|어떻게|왜/.test(text) || text.includes('?')) {
+  // 확인 질문 — ADR: 중요해 / 달라에도 포함
+  if (
+    /모르겠어|확인|뭐야|어떤|어떻게|왜|중요|달라|다르/.test(text) ||
+    text.includes('?')
+  ) {
     out.push('확인질문');
   }
 
@@ -170,10 +180,13 @@ function mapCandidates(
     out.push('연결');
   }
 
-  // 위 네 개에 안 걸리면 보류
-  if (out.length === 0) {
+  // 보류 — ADR: 잘 모르겠어에 보류 포함
+  if (/모르겠어|나중에|일단|보류|천천히/.test(text)) {
     out.push('보류');
-  } else if (!out.includes('보류') && /나중에|일단|보류|천천히/.test(text)) {
+  }
+
+  // 아무 후보도 없으면 보류만 (이후 evaluate에서 AU 아님 처리)
+  if (out.length === 0) {
     out.push('보류');
   }
 
@@ -181,6 +194,7 @@ function mapCandidates(
 }
 
 function pickPrimary(candidates: ActionCandidate[]): ActionCandidate {
+  // 보류는 최후. 실행성 후보 우선.
   const order: ActionCandidate[] = [
     '이해갱신',
     '남김',
