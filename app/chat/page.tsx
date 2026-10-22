@@ -3,10 +3,18 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import Sidebar from '@/components/Sidebar';
 
+type HermesInfo = {
+  hasActionUnit: boolean;
+  candidates: string[];
+  primary?: string;
+};
+
 type Message = {
   role: 'user' | 'assistant';
   content: string;
   observations?: string[];
+  /** Phase 1: 제안만. 실행은 사람 승인 후 기존 경로. */
+  hermes?: HermesInfo;
 };
 
 type ContextDraft = {
@@ -34,6 +42,12 @@ const S: Record<string, CSSProperties> = {
   obsBox:      { marginTop: 10, padding: '8px 10px', background: 'rgba(63,185,80,0.07)', border: '1px solid rgba(63,185,80,0.2)', borderRadius: 6 },
   obsLabel:    { fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: 'var(--accent2)', fontFamily: 'JetBrains Mono, monospace', marginBottom: 6 },
   obsItem:     { fontSize: 12, color: 'var(--text2)', lineHeight: 1.6, paddingLeft: 2 },
+  hermesBox:   { marginTop: 10, padding: '8px 10px', background: 'rgba(88,166,255,0.07)', border: '1px solid rgba(88,166,255,0.25)', borderRadius: 6 },
+  hermesLabel: { fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: 'var(--accent)', fontFamily: 'JetBrains Mono, monospace', marginBottom: 6 },
+  hermesMeta:  { fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, marginBottom: 8 },
+  hermesHint:  { fontSize: 10, color: 'var(--text3)', lineHeight: 1.45, marginBottom: 8 },
+  hermesRow:   { display: 'flex', flexWrap: 'wrap', gap: 6 },
+  hermesBtn:   { fontSize: 11, padding: '5px 10px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text2)', cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif' },
   inputArea:   { padding: '12px 24px 16px', borderTop: '1px solid var(--border)', background: 'var(--bg2)', flexShrink: 0 },
   inputRow:    { display: 'flex', gap: 10, alignItems: 'flex-end' },
   textarea:    { flex: 1, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', padding: '10px 14px', fontSize: 13, outline: 'none', resize: 'none', fontFamily: 'Noto Sans KR, sans-serif', lineHeight: 1.5, minHeight: 44, maxHeight: 140 },
@@ -80,7 +94,7 @@ const INIT_MESSAGE: Message = {
   role: 'assistant',
   content:
     '안녕하세요. 마당 원본을 이해하고 대화하는 HajunAI입니다.\n' +
-    '창에만 적은 말은 세션 한도이고, 남길 내용은 오른쪽 「마당에 남기기」로 원본이 됩니다.',
+    '창에만 적은 말은 세션 한도이고, 남길 내용은 오른쪽 「마당에  남기기」로 원본이 됩니다.',
 };
 
 const EMPTY_DRAFT: ContextDraft = { last_task: '', summary: '', next_action: '', current_problems: '' };
@@ -215,11 +229,23 @@ export default function ChatPage() {
       if (json._error) {
         setMessages(prev => [...prev, { role: 'assistant', content: `오류: ${json._error}` }]);
       } else {
+        const hermesRaw = json.hermes;
+        const hermes: HermesInfo | undefined =
+          hermesRaw && typeof hermesRaw === 'object'
+            ? {
+                hasActionUnit: !!hermesRaw.hasActionUnit,
+                candidates: Array.isArray(hermesRaw.candidates)
+                  ? hermesRaw.candidates.map(String)
+                  : [],
+                primary: hermesRaw.primary ? String(hermesRaw.primary) : undefined,
+              }
+            : undefined;
         setMessages(prev => [...prev, {
           role: 'assistant',
           content: json.reply || '(응답 없음)',
           observations: Array.isArray(json.observations) && json.observations.length > 0
             ? json.observations : undefined,
+          hermes,
         }]);
       }
     } catch (e) {
@@ -321,6 +347,27 @@ export default function ChatPage() {
     finally { setSaving(false); }
   };
 
+  /** Phase 1: 남김 제안 승인 → 기존 마당 패널만 채움. Hermes는 write 하지 않음. */
+  const acceptLeave = (m: Message) => {
+    const lastUser = [...messages].reverse().find((x) => x.role === 'user');
+    const seed = (lastUser?.content || m.content || '').trim();
+    if (seed) setYardContent(seed);
+    setMsgType('understanding');
+    setPanelOpen(true);
+    setYardStatus('Hermes 제안: 남김 — 내용 확인 후 「마당에 남기기」로 승인');
+  };
+
+  /** Phase 1: 확인질문 제안 → 입력창 초안만. 전송은 사람. */
+  const acceptConfirmQuestion = () => {
+    const draftQ = '이 부분에서 확인하고 싶은 점이 있어요. 어떤 의미로 말씀하신 건가요?';
+    setInput(draftQ);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 140) + 'px';
+      textareaRef.current.focus();
+    }
+  };
+
   const PanelContent = () => (
     <div style={S.panelBody}>
       <div>
@@ -393,22 +440,22 @@ export default function ChatPage() {
             <div>
               <div style={S.fieldLabel}>마지막 작업</div>
               <input style={S.fieldInput} value={draft.last_task}
-                onChange={e => setDraft(d => ({ ...d, last_task: e.target.value }))} />
+                onChange={(e) => setDraft(d => ({ ...d, last_task: e.target.value }))} />
             </div>
             <div>
               <div style={S.fieldLabel}>요약</div>
-              <textarea style={{ ...S.fieldTA, minHeight: 70 }} value={draft.summary}
-                onChange={e => setDraft(d => ({ ...d, summary: e.target.value }))} />
+              <textarea style={{ ...S.fieldTA, minHeight: 72 }} value={draft.summary}
+                onChange={(e) => setDraft(d => ({ ...d, summary: e.target.value }))} />
             </div>
             <div>
               <div style={S.fieldLabel}>다음 액션</div>
-              <input style={S.fieldInput} value={draft.next_action}
-                onChange={e => setDraft(d => ({ ...d, next_action: e.target.value }))} />
+              <textarea style={{ ...S.fieldTA, minHeight: 56 }} value={draft.next_action}
+                onChange={(e) => setDraft(d => ({ ...d, next_action: e.target.value }))} />
             </div>
             <div>
               <div style={S.fieldLabel}>현재 문제</div>
-              <input style={S.fieldInput} value={draft.current_problems}
-                onChange={e => setDraft(d => ({ ...d, current_problems: e.target.value }))} />
+              <textarea style={{ ...S.fieldTA, minHeight: 56 }} value={draft.current_problems}
+                onChange={(e) => setDraft(d => ({ ...d, current_problems: e.target.value }))} />
             </div>
             <button style={{ ...S.saveBtn, ...(saving ? S.saveBtnOff : {}) }}
               onClick={saveContext} disabled={saving}>
@@ -430,24 +477,20 @@ export default function ChatPage() {
       <Sidebar />
       <main style={S.main}>
         <div style={S.header}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
               <div style={S.title}>HajunAI</div>
-              <div style={S.sub}>현관(chat) · 원본은 마당 · 이해는 contexts</div>
+              <div style={S.sub}>대화 · 마당 원본과 분리 · Hermes 제안만</div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button style={{ ...S.clearBtn, display: 'none' }}
-                className="panel-toggle-btn"
-                onClick={() => setPanelOpen(!panelOpen)}>
-                {panelOpen ? '✕ 패널' : '⚙ 패널'}
-              </button>
-              <button style={S.clearBtn} onClick={clearChat}>대화 초기화</button>
+              <button style={S.clearBtn} onClick={clearChat}>대화 비우기</button>
+              <button style={{ ...S.clearBtn }} className="panel-toggle-btn" onClick={() => setPanelOpen(true)}>원본·맥락</button>
             </div>
           </div>
         </div>
 
         <div style={S.body}>
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
             <div style={S.messages}>
               {messages.map((m, i) => (
                 <div key={i} style={bubbleStyle(m.role)}>
@@ -461,6 +504,30 @@ export default function ChatPage() {
                           · {obs}
                         </div>
                       ))}
+                    </div>
+                  )}
+                  {m.role === 'assistant' && m.hermes?.hasActionUnit && (
+                    <div style={S.hermesBox}>
+                      <div style={S.hermesLabel}>Hermes 제안 · 실행 아님</div>
+                      <div style={S.hermesMeta}>
+                        후보: {(m.hermes.candidates || []).join(', ') || '—'}
+                        {m.hermes.primary ? ` · 우선: ${m.hermes.primary}` : ''}
+                      </div>
+                      <div style={S.hermesHint}>
+                        승인 후에만 반영됩니다. Hermes가 자동으로 남기거나 이해를 바꾸지 않습니다.
+                      </div>
+                      <div style={S.hermesRow}>
+                        {(m.hermes.candidates || []).includes('남김') && (
+                          <button type="button" style={S.hermesBtn} onClick={() => acceptLeave(m)}>
+ 남김 제안 받기
+                          </button>
+                        )}
+                        {(m.hermes.candidates || []).includes('확인질문') && (
+                          <button type="button" style={S.hermesBtn} onClick={acceptConfirmQuestion}>
+                            확인 질문 초안
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -512,17 +579,14 @@ export default function ChatPage() {
 
         @media (max-width: 768px) {
           .desktop-panel { display: none !important; }
-          .panel-toggle-btn { display: block !important; }
+          .panel-toggle-btn { display: inline-block !important; }
           .mobile-panel {
-            display: flex;
+            display: flex !important;
             flex-direction: column;
             position: fixed;
-            bottom: 0; left: 0; right: 0;
-            max-height: 70vh;
-            background: var(--bg2);
-            border-top: 1px solid var(--border);
-            border-radius: var(--radius) var(--radius) 0 0;
+            inset: 0;
             z-index: 40;
+            background: var(--bg2);
           }
         }
       `}</style>
