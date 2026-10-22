@@ -87,4 +87,4 @@ for (const c of cases) {
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
-Juliaif (failed > 0) process.exit(1);
+if (failed > 0) process.exit(1);
