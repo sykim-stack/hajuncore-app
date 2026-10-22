@@ -94,7 +94,7 @@ const INIT_MESSAGE: Message = {
   role: 'assistant',
   content:
     '안녕하세요. 마당 원본을 이해하고 대화하는 HajunAI입니다.\n' +
-    '창에만 적은 말은 세션 한도이고, 남길 내용은 오른쪽 「마당에  남기기」로 원본이 됩니다.',
+    '창에만 적은 말은 세션 한도이고, 남길 내용은 오른쪽 「마당에 남기기」로 원본이 됩니다.',
 };
 
 const EMPTY_DRAFT: ContextDraft = { last_task: '', summary: '', next_action: '', current_problems: '' };
@@ -519,7 +519,7 @@ export default function ChatPage() {
                       <div style={S.hermesRow}>
                         {(m.hermes.candidates || []).includes('남김') && (
                           <button type="button" style={S.hermesBtn} onClick={() => acceptLeave(m)}>
- 남김 제안 받기
+                            남김 제안 받기
                           </button>
                         )}
                         {(m.hermes.candidates || []).includes('확인질문') && (
