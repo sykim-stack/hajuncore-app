@@ -25,7 +25,7 @@ type ContextDraft = {
 };
 
 type YardOpt = { key: string; name?: string };
-type RoomOpt = { key: string; name?: string; id?: string };
+ type RoomOpt = { key: string; name?: string; id?: string };
 
 const STORAGE_KEY = 'hajunai_chat_messages';
 const YARD_ALLOW = new Set(['gwanje', 'gaebal', 'brainpool']);
