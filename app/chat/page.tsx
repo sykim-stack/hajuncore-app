@@ -94,7 +94,7 @@ const INIT_MESSAGE: Message = {
   role: 'assistant',
   content:
     '안녕하세요. 마당 원본을 이해하고 대화하는 HajunAI입니다.\n' +
-    '창에만 적은 말은 세션 한도이고, 남길 내용은 오른쪽 「마당에  남기기」로 원본이 됩니다.',
+    '창에만 적은 말은 세션 한도이고, 남길 내용은 오른쪽 「마당에 남기기」로 원본이 됩니다.',
 };
 
 const EMPTY_DRAFT: ContextDraft = { last_task: '', summary: '', next_action: '', current_problems: '' };
@@ -144,6 +144,12 @@ export default function ChatPage() {
   const [yardSaving, setYardSaving] = useState(false);
   const [yardStatus, setYardStatus] = useState('');
   const [synthAfter, setSynthAfter] = useState(true);
+
+  // Phase 1: 이해갱신 승인 (Option A)
+  const [showUnderstandingConfirm, setShowUnderstandingConfirm] = useState(false);
+  const [currentUnderstanding, setCurrentUnderstanding] = useState<string | null>(null);
+  const [understandingLoading, setUnderstandingLoading] = useState(false);
+  const [resynthLoading, setResynthLoading] = useState(false);
 
   const bottomRef    = useRef<HTMLDivElement>(null);
   const textareaRef  = useRef<HTMLTextAreaElement>(null);
@@ -368,6 +374,64 @@ export default function ChatPage() {
     }
   };
 
+  /** Phase 1: 이해갱신 1차 — 현재 이해만 보여줌. synthesize 호출 없음. */
+  const acceptUnderstandingUpdate = async () => {
+    setUnderstandingLoading(true);
+    setCurrentUnderstanding(null);
+    setShowUnderstandingConfirm(true);
+    try {
+      const res = await fetch('/api/hajun?action=contexts');
+      const json = await res.json();
+      const text =
+        (json?.payload?.understanding && String(json.payload.understanding).trim()) ||
+        '(아직 저장된 이해가 없습니다)';
+      setCurrentUnderstanding(text);
+    } catch (e) {
+      setCurrentUnderstanding(
+        `이해를 불러오지 못했습니다: ${e instanceof Error ? e.message : String(e)}`
+      );
+    } finally {
+      setUnderstandingLoading(false);
+    }
+  };
+
+  /** Phase 1: 이해갱신 2차 — 사람 확인 후에만 기존 synthesize_context 호출. */
+  const confirmResynthesize = async () => {
+    if (resynthLoading) return;
+    setResynthLoading(true);
+    try {
+      const res = await fetch('/api/hajun?action=synthesize_context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const json = await res.json();
+      if (json._error) {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: `이해 갱신 실패: ${json._error}` },
+        ]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: '이해를 다시 만들었습니다.' },
+        ]);
+      }
+      setShowUnderstandingConfirm(false);
+      setCurrentUnderstanding(null);
+    } catch (e) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: `이해 갱신 네트워크 오류: ${e instanceof Error ? e.message : String(e)}`,
+        },
+      ]);
+    } finally {
+      setResynthLoading(false);
+    }
+  };
+
   const PanelContent = () => (
     <div style={S.panelBody}>
       <div>
@@ -519,12 +583,17 @@ export default function ChatPage() {
                       <div style={S.hermesRow}>
                         {(m.hermes.candidates || []).includes('남김') && (
                           <button type="button" style={S.hermesBtn} onClick={() => acceptLeave(m)}>
- 남김 제안 받기
+                            남김 제안 받기
                           </button>
                         )}
                         {(m.hermes.candidates || []).includes('확인질문') && (
                           <button type="button" style={S.hermesBtn} onClick={acceptConfirmQuestion}>
                             확인 질문 초안
+                          </button>
+                        )}
+                        {(m.hermes.candidates || []).includes('이해갱신') && (
+                          <button type="button" style={S.hermesBtn} onClick={acceptUnderstandingUpdate}>
+                            이해갱신 제안 받기
                           </button>
                         )}
                       </div>
@@ -535,6 +604,86 @@ export default function ChatPage() {
               {loading && <div style={S.thinking}>HajunAI가 생각 중...</div>}
               <div ref={bottomRef} />
             </div>
+
+      {/* Phase 1: 이해갱신 2차 확인 패널 */}
+      {showUnderstandingConfirm && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 50,
+          }}
+        >
+          <div
+            style={{
+              width: 'min(480px, 92vw)',
+              maxHeight: '80vh',
+              overflowY: 'auto',
+              background: 'var(--bg2)',
+              border: '1px solid var(--border)',
+              borderRadius: 10,
+              padding: '16px 18px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+            }}
+          >
+            <div style={{ ...S.hermesLabel, marginBottom: 0 }}>현재 이해</div>
+            <div
+              style={{
+                fontSize: 12,
+                color: 'var(--text2)',
+                lineHeight: 1.6,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                background: 'var(--bg3)',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                padding: '10px 12px',
+                minHeight: 80,
+              }}
+            >
+              {understandingLoading
+                ? '불러오는 중…'
+                : currentUnderstanding || '(없음)'}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+              이 이해를 다시 만들까요? Hermes가 자동으로 실행하지 않습니다.
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                style={S.hermesBtn}
+                onClick={() => {
+                  setShowUnderstandingConfirm(false);
+                  setCurrentUnderstanding(null);
+                }}
+                disabled={resynthLoading}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                style={{
+                  ...S.hermesBtn,
+                  background: 'var(--accent)',
+                  color: '#0D1117',
+                  border: 'none',
+                  fontWeight: 700,
+                }}
+                onClick={confirmResynthesize}
+                disabled={resynthLoading || understandingLoading}
+              >
+                {resynthLoading ? '실행 중…' : '이 이해를 다시 만들기'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
             <div style={S.inputArea}>
               <div style={S.inputRow}>
