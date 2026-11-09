@@ -161,12 +161,12 @@ export function buildSnapshotKeywords(content: Record<string, unknown>): string[
 }
 
 export function calcSnapshotConfidence(snapshot: Record<string, unknown>): number {
-  const summary = ((snapshot.content as Record<string, unknown>)?.summary || {}) as Record<string, number>;
+  const house   = ((snapshot.content as Record<string, unknown>)?.summary || {}) as Record<string, number>;
   const ids = (snapshot.source_message_ids as string[]) || [];
   let conf = 0.55;
-  if ((summary.total_messages || 0) > 5) conf += 0.10;
-  if ((summary.seed_rooms     || 0) > 0) conf += 0.05;
-  if ((summary.total_fruits   || 0) > 0) conf += 0.05;
+  if ((house.total_messages || 0) > 5) conf += 0.10;
+  if ((house.seed_rooms     || 0) > 0) conf += 0.05;
+  if ((house.total_fruits   || 0) > 0) conf += 0.05;
   if (ids.length > 1)                    conf += 0.05;
   return Math.min(conf, 0.90);
 }
@@ -293,7 +293,7 @@ async function callGeminiChat(
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents,
-        generationConfig: { temperature: 0.4, maxOutputTokens: 1024 },
+        generationConfig: { temperature: 0.4, maxOutputTokens: 2500 },
       }),
     }
   );
@@ -324,7 +324,7 @@ async function callGroqOnce(
       model,
       messages,
       temperature: 0.4,
-      max_tokens: 1024,
+      max_tokens: 2500,
     }),
   });
   if (!res.ok) {
@@ -368,7 +368,7 @@ export async function callGroq(
           model,
           messages,
           temperature: 0.4,
-          max_tokens: 1024,
+          max_tokens: 2500,
           stream: false,
         }),
       });
