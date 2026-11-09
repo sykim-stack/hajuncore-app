@@ -432,25 +432,313 @@ export default function ChatPage() {
     }
   };
 
-  // EMERGENCY PARTIAL - full JSX must follow from local restore file
-  // If you see this comment in production, replace with chat_page_RESTORE_with_연결.tsx
+  const PanelContent = () => (
+    <div style={S.panelBody}>
+      <div>
+        <div style={{ ...S.fieldLabel, color: 'var(--accent2)' }}>마당에 남기기</div>
+        <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.5, marginBottom: 8 }}>
+          결정·이슈·문서 등 원본으로 남길 때만. 잡담은 남기지 않습니다.
+        </div>
+        <div style={S.fieldLabel}>마당</div>
+        <select style={S.fieldInput} value={yardKey} onChange={(e) => setYardKey(e.target.value)}>
+          {(yards.length ? yards : [
+            { key: 'gwanje', name: '관제' },
+            { key: 'gaebal', name: '개발' },
+            { key: 'brainpool', name: '브라이언풀' },
+          ]).map((y) => (
+            <option key={y.key} value={y.key}>{y.name || y.key} ({y.key})</option>
+          ))}
+        </select>
+        <div style={{ ...S.fieldLabel, marginTop: 8 }}>방</div>
+        <select style={S.fieldInput} value={roomKey} onChange={(e) => setRoomKey(e.target.value)} disabled={!rooms.length}>
+          {!rooms.length && <option value="">방 목록 없음</option>}
+          {rooms.map((r) => (
+            <option key={r.key} value={r.key}>{r.name || r.key}</option>
+          ))}
+        </select>
+        <div style={{ ...S.fieldLabel, marginTop: 8 }}>종류</div>
+        <select style={S.fieldInput} value={msgType} onChange={(e) => setMsgType(e.target.value)}>
+          {MSG_TYPES.map((t) => (
+            <option key={t.value} value={t.value}>{t.label}</option>
+          ))}
+        </select>
+        <div style={{ display: 'flex', gap: 6, marginTop: 8, marginBottom: 6 }}>
+          <button type="button" style={S.smallBtn} onClick={fillFromLastUser}>최근 내 말</button>
+          <button type="button" style={S.smallBtn} onClick={fillFromLastAssistant}>최근 답</button>
+        </div>
+        <textarea
+          style={{ ...S.fieldTA, minHeight: 88 }}
+          placeholder="마당에 남길 원문..."
+          value={yardContent}
+          onChange={(e) => setYardContent(e.target.value)}
+        />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
+          <input type="checkbox" checked={synthAfter} onChange={(e) => setSynthAfter(e.target.checked)} />
+          저장 후 이해 종합(synthesize)
+        </label>
+        <button
+          style={{ ...S.saveBtn, marginTop: 8, ...(yardSaving || !yardContent.trim() || !roomKey ? S.saveBtnOff : {}) }}
+          onClick={saveToYard}
+          disabled={yardSaving || !yardContent.trim() || !roomKey}
+        >
+          {yardSaving ? '⏳ 저장 중...' : '📌 마당에 남기기'}
+        </button>
+        {yardStatus && (
+          <div style={{ ...S.statusMsg, color: yardStatus.startsWith('✅') ? 'var(--accent2)' : 'var(--warn)' }}>
+            {yardStatus}
+          </div>
+        )}
+      </div>
+
+      <div style={S.section}>
+        <div style={S.fieldLabel}>dev_contexts (개발 핸드오프)</div>
+        <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.6, marginBottom: 8 }}>
+          요약 API는 축소됨. synthesize_context 권장.
+        </div>
+        <button style={{ ...S.analyzeBtn, ...(analyzing ? S.saveBtnOff : {}) }}
+          onClick={analyzeContext} disabled={analyzing}>
+          {analyzing ? '⏳ 분석 중...' : '🔍 맥락 요약 실행'}
+        </button>
+        {hasDraft && (
+          <>
+            <div>
+              <div style={S.fieldLabel}>마지막 작업</div>
+              <input style={S.fieldInput} value={draft.last_task}
+                onChange={(e) => setDraft(d => ({ ...d, last_task: e.target.value }))} />
+            </div>
+            <div>
+              <div style={S.fieldLabel}>요약</div>
+              <textarea style={{ ...S.fieldTA, minHeight: 72 }} value={draft.summary}
+                onChange={(e) => setDraft(d => ({ ...d, summary: e.target.value }))} />
+            </div>
+            <div>
+              <div style={S.fieldLabel}>다음 액션</div>
+              <textarea style={{ ...S.fieldTA, minHeight: 56 }} value={draft.next_action}
+                onChange={(e) => setDraft(d => ({ ...d, next_action: e.target.value }))} />
+            </div>
+            <div>
+              <div style={S.fieldLabel}>현재 문제</div>
+              <textarea style={{ ...S.fieldTA, minHeight: 56 }} value={draft.current_problems}
+                onChange={(e) => setDraft(d => ({ ...d, current_problems: e.target.value }))} />
+            </div>
+            <button style={{ ...S.saveBtn, ...(saving ? S.saveBtnOff : {}) }}
+              onClick={saveContext} disabled={saving}>
+              {saving ? '⏳ 저장 중...' : '💾 dev_contexts 저장'}
+            </button>
+          </>
+        )}
+        {statusMsg && (
+          <div style={{ ...S.statusMsg, color: statusMsg.startsWith('✅') ? 'var(--accent2)' : 'var(--warn)' }}>
+            {statusMsg}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <div style={S.page}>
       <Sidebar />
-      <div style={S.main}>
+      <main style={S.main}>
         <div style={S.header}>
-          <div style={S.title}>HajunAI</div>
-          <div style={S.sub}>복구 중 — 전체 페이지는 로컬 파일로 교체해 주세요</div>
-        </div>
-        <div style={S.messages}>
-          <div style={bubbleStyle('assistant')}>
-            <div style={roleLabelStyle('assistant')}>HajunAI</div>
-            <div style={S.text}>
-              채팅 페이지가 긴급 복구 상태입니다. 로컬에서 chat_page_RESTORE_with_연결.tsx 또는 chat_page_RESTORE_original.tsx 로 app/chat/page.tsx 를 교체한 뒤 커밋·푸시해 주세요.
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <div style={S.title}>HajunAI</div>
+              <div style={S.sub}>대화 · 마당 원본과 분리 · Hermes 제안만</div>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={S.clearBtn} onClick={clearChat}>대화 비우기</button>
+              <button style={{ ...S.clearBtn }} className="panel-toggle-btn" onClick={() => setPanelOpen(true)}>원본·맥락</button>
             </div>
           </div>
         </div>
-      </div>
+
+        <div style={S.body}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            <div style={S.messages}>
+              {messages.map((m, i) => (
+                <div key={i} style={bubbleStyle(m.role)}>
+                  <div style={roleLabelStyle(m.role)}>{m.role === 'user' ? '나' : 'HajunAI'}</div>
+                  <div style={S.text}>{m.content}</div>
+                  {m.observations && m.observations.length > 0 && (
+                    <div style={S.obsBox}>
+                      <div style={S.obsLabel}>관찰</div>
+                      {m.observations.map((obs, j) => (
+                        <div key={j} style={{ ...S.obsItem, marginBottom: j < (m.observations as string[]).length - 1 ? 4 : 0 }}>
+                          · {obs}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {m.role === 'assistant' && m.hermes?.hasActionUnit && (
+                    <div style={S.hermesBox}>
+                      <div style={S.hermesLabel}>Hermes 제안 · 실행 아님</div>
+                      <div style={S.hermesMeta}>
+                        후보: {(m.hermes.candidates || []).join(', ') || '—'}
+                        {m.hermes.primary ? ` · 우선: ${m.hermes.primary}` : ''}
+                      </div>
+                      <div style={S.hermesHint}>
+                        승인 후에만 반영됩니다. Hermes가 자동으로 남기거나 이해를 바꾸지 않습니다.
+                      </div>
+                      <div style={S.hermesRow}>
+                        {(m.hermes.candidates || []).includes('남김') && (
+                          <button type="button" style={S.hermesBtn} onClick={() => acceptLeave(m)}>
+                            남김 제안 받기
+                          </button>
+                        )}
+                        {(m.hermes.candidates || []).includes('확인질문') && (
+                          <button type="button" style={S.hermesBtn} onClick={acceptConfirmQuestion}>
+                            확인 질문 초안
+                          </button>
+                        )}
+                        {(m.hermes.candidates || []).includes('이해갱신') && (
+                          <button type="button" style={S.hermesBtn} onClick={acceptUnderstandingUpdate}>
+                            이해갱신 제안 받기
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {loading && <div style={S.thinking}>HajunAI가 생각 중...</div>}
+              <div ref={bottomRef} />
+            </div>
+
+      {/* Phase 1: 이해갱신 2차 확인 패널 */}
+      {showUnderstandingConfirm && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 50,
+          }}
+        >
+          <div
+            style={{
+              width: 'min(480px, 92vw)',
+              maxHeight: '80vh',
+              overflowY: 'auto',
+              background: 'var(--bg2)',
+              border: '1px solid var(--border)',
+              borderRadius: 10,
+              padding: '16px 18px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+            }}
+          >
+            <div style={{ ...S.hermesLabel, marginBottom: 0 }}>현재 이해</div>
+            <div
+              style={{
+                fontSize: 12,
+                color: 'var(--text2)',
+                lineHeight: 1.6,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                background: 'var(--bg3)',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                padding: '10px 12px',
+                minHeight: 80,
+              }}
+            >
+              {understandingLoading
+                ? '불러오는 중…'
+                : currentUnderstanding || '(없음)'}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+              이 이해를 다시 만들까요? Hermes가 자동으로 실행하지 않습니다.
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                style={S.hermesBtn}
+                onClick={() => {
+                  setShowUnderstandingConfirm(false);
+                  setCurrentUnderstanding(null);
+                }}
+                disabled={resynthLoading}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                style={{
+                  ...S.hermesBtn,
+                  background: 'var(--accent)',
+                  color: '#0D1117',
+                  border: 'none',
+                  fontWeight: 700,
+                }}
+                onClick={confirmResynthesize}
+                disabled={resynthLoading || understandingLoading}
+              >
+                {resynthLoading ? '실행 중…' : '이 이해를 다시 만들기'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+            <div style={S.inputArea}>
+              <div style={S.inputRow}>
+                <textarea ref={textareaRef} style={S.textarea}
+                  placeholder="질문… (Enter 전송 · 원본 남기기는 오른쪽 패널)"
+                  value={input} onChange={handleInput} onKeyDown={onKeyDown}
+                  rows={1} disabled={loading} />
+                <button style={{ ...S.sendBtn, ...(loading || !input.trim() ? S.sendBtnOff : {}) }}
+                  onClick={send} disabled={loading || !input.trim()}>
+                  전송
+                </button>
+              </div>
+              <div style={S.hint}>브라우저 대화 보관 · 영구 원본은 「마당에 남기기」</div>
+            </div>
+          </div>
+
+          <div style={S.panel} className="desktop-panel">
+            <div style={S.panelHeader}>
+              <span style={S.panelTitle}>원본 · 맥락</span>
+            </div>
+            <PanelContent />
+          </div>
+        </div>
+
+        {panelOpen && (
+          <div className="mobile-panel">
+            <div style={{ ...S.panelHeader, borderBottom: '1px solid var(--border)' }}>
+              <span style={S.panelTitle}>원본 · 맥락</span>
+              <button style={S.clearBtn} onClick={() => setPanelOpen(false)}>✕</button>
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              <PanelContent />
+            </div>
+          </div>
+        )}
+      </main>
+
+      <style>{`
+        .desktop-panel { display: flex !important; }
+        .mobile-panel  { display: none; }
+        .panel-toggle-btn { display: none !important; }
+
+        @media (max-width: 768px) {
+          .desktop-panel { display: none !important; }
+          .panel-toggle-btn { display: inline-block !important; }
+          .mobile-panel {
+            display: flex !important;
+            flex-direction: column;
+            position: fixed;
+            inset: 0;
+            z-index: 40;
+            background: var(--bg2);
+          }
+        }
+      `}</style>
     </div>
   );
 }
