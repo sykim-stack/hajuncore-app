@@ -1,22 +1,30 @@
-# Hermes Phase 1 — 연결 승인 면 적용
-# 사용법 (G:\hajuncore-app 에서):
-#   powershell -ExecutionPolicy Bypass -File .\apply_hermes_connect.ps1
-# 또는:
-#   Invoke-WebRequest -Uri "https://raw.githubusercontent.com/sykim-stack/hajuncore-app/main/patches/apply_hermes_connect.ps1" -OutFile .\apply_hermes_connect.ps1
+# Hermes Phase 1 - connect approval surface apply script
+# Run from G:\hajuncore-app:
 #   powershell -ExecutionPolicy Bypass -File .\apply_hermes_connect.ps1
 
 $ErrorActionPreference = "Stop"
 $path = "app\chat\page.tsx"
-if (-not (Test-Path $path)) { $path = "G:\hajuncore-app\app\chat\page.tsx" }
-if (-not (Test-Path $path)) { Write-Error "app/chat/page.tsx 없음. 레포 루트에서 실행하세요." }
+if (-not (Test-Path $path)) {
+  $path = "G:\hajuncore-app\app\chat\page.tsx"
+}
+if (-not (Test-Path $path)) {
+  Write-Error "app/chat/page.tsx not found. Run from repo root."
+}
 
 $t = [System.IO.File]::ReadAllText($path)
-if ($t -match "acceptConnect") { Write-Host "이미 적용됨."; exit 0 }
-if ($t -match "복구 중|EMERGENCY PARTIAL") { Write-Error "복구 중 파일입니다. 219b8cd 정상본으로 먼저 복원하세요." }
+if ($t -match "acceptConnect") {
+  Write-Host "Already applied."
+  exit 0
+}
+if ($t -match "EMERGENCY PARTIAL") {
+  Write-Error "Emergency partial page detected. Restore 219b8cd first."
+}
 
 function Replace-Once([string]$src, [string]$old, [string]$new, [string]$label) {
   $i = $src.IndexOf($old)
-  if ($i -lt 0) { throw "못 찾음: $label" }
+  if ($i -lt 0) {
+    throw ("Block not found: " + $label)
+  }
   return $src.Remove($i, $old.Length).Insert($i, $new)
 }
 
@@ -33,7 +41,7 @@ $new1 = @'
   const [understandingLoading, setUnderstandingLoading] = useState(false);
   const [resynthLoading, setResynthLoading] = useState(false);
 
-  // Phase 1: 연결 제안 (ref/칩 제안만 · write 없음)
+  // Phase 1: connect proposal (hint only, no write)
   const [showConnectHint, setShowConnectHint] = useState(false);
   const [connectUnderstanding, setConnectUnderstanding] = useState<string | null>(null);
   const [connectLoading, setConnectLoading] = useState(false);
@@ -64,7 +72,7 @@ $new2 = @'
     }
   };
 
-  /** Phase 1: 연결 제안 — 현재 이해만 보여줌. 자동 링크/write 없음. */
+  /** Phase 1: 연결 제안 - 현재 이해만 보여줌. 자동 링크/write 없음. */
   const acceptConnect = async () => {
     setConnectLoading(true);
     setConnectUnderstanding(null);
@@ -128,7 +136,7 @@ $new4 = @'
         </div>
       )}
 
-      {/* Phase 1: 연결 제안 — 현재 이해 표시만. write/링크 없음 */}
+      {/* Phase 1: 연결 제안 - 현재 이해 표시만. write/링크 없음 */}
       {showConnectHint && (
         <div
           style={{
@@ -201,7 +209,7 @@ $new4 = @'
                         : `[연결 참고]\n${seed.slice(0, 800)}`
                     );
                     setPanelOpen(true);
-                    setYardStatus('Hermes 제안: 연결 — 참고 내용을 마당 패널에 넣었습니다. 필요 시 수정 후 남기세요.');
+                    setYardStatus('Hermes 제안: 연결 - 참고 내용을 마당 패널에 넣었습니다. 필요 시 수정 후 남기세요.');
                   }
                   setShowConnectHint(false);
                   setConnectUnderstanding(null);
@@ -223,11 +231,11 @@ $t = Replace-Once $t $old3 $new3 "button"
 $t = Replace-Once $t $old4 $new4 "modal"
 
 [System.IO.File]::WriteAllText($path, $t)
-Write-Host "OK: 연결 승인 면 적용 완료 → $path"
-Write-Host "확인:"
-Select-String -Path $path -Pattern "연결 제안 보기|acceptConnect|복구 중" | ForEach-Object { $_.Line.Trim() }
+Write-Host "OK: connect surface applied"
+Write-Host "Check:"
+Select-String -Path $path -Pattern "acceptConnect|연결 제안 보기|EMERGENCY" | ForEach-Object { $_.Line.Trim() }
 Write-Host ""
-Write-Host "다음:"
+Write-Host "Next:"
 Write-Host "  git add app/chat/page.tsx"
-Write-Host '  git commit -m "feat(hermes): Phase 1 연결 승인 면 (ref 제안만 · write 없음)"'
+Write-Host '  git commit -m "feat(hermes): Phase 1 connect approval surface"'
 Write-Host "  git push origin main"
