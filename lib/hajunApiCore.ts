@@ -161,12 +161,12 @@ export function buildSnapshotKeywords(content: Record<string, unknown>): string[
 }
 
 export function calcSnapshotConfidence(snapshot: Record<string, unknown>): number {
-  const house   = ((snapshot.content as Record<string, unknown>)?.summary || {}) as Record<string, number>;
+  const summary = ((snapshot.content as Record<string, unknown>)?.summary || {}) as Record<string, number>;
   const ids = (snapshot.source_message_ids as string[]) || [];
   let conf = 0.55;
-  if ((house.total_messages || 0) > 5) conf += 0.10;
-  if ((house.seed_rooms     || 0) > 0) conf += 0.05;
-  if ((house.total_fruits   || 0) > 0) conf += 0.05;
+  if ((summary.total_messages || 0) > 5) conf += 0.10;
+  if ((summary.seed_rooms     || 0) > 0) conf += 0.05;
+  if ((summary.total_fruits   || 0) > 0) conf += 0.05;
   if (ids.length > 1)                    conf += 0.05;
   return Math.min(conf, 0.90);
 }
