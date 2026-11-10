@@ -69,11 +69,11 @@ export default function Sidebar() {
               background: 'linear-gradient(135deg,#58A6FF,#3FB950)',
               borderRadius: 8, display: 'flex', alignItems: 'center',
               justifyContent: 'center', fontFamily: 'JetBrains Mono, monospace',
-              fontWeight: 700, fontSize: 13, color: '#0D1117', flexShrink: 0,
+              fontWeight: 700, fontSize: 14, color: '#0D1117', flexShrink: 0,
             }}>BP</div>
             <div>
-              <div style={{ fontWeight: 700, fontSize: 14 }}>HajunCore</div>
-              <div style={{ fontSize: 10, color: 'var(--text2)', fontFamily: 'JetBrains Mono, monospace' }}>BRAINPOOL OS</div>
+              <div style={{ fontWeight: 700, fontSize: 16 }}>HajunCore</div>
+              <div style={{ fontSize: 13, color: 'var(--text2)', fontFamily: 'Noto Sans KR, sans-serif' }}>BRAINPOOL OS</div>
             </div>
           </div>
         </div>
@@ -88,7 +88,7 @@ export default function Sidebar() {
                 style={{
                   display: 'flex', alignItems: 'center', gap: 10,
                   padding: '10px 12px', borderRadius: 'var(--radius)',
-                  textDecoration: 'none', fontSize: 13,
+                  textDecoration: 'none', fontSize: 16,
                   fontWeight: active ? 600 : 400,
                   color: active ? 'var(--accent)' : 'var(--text2)',
                   background: active ? 'rgba(88,166,255,0.1)' : 'transparent',
@@ -101,7 +101,7 @@ export default function Sidebar() {
           })}
         </nav>
 
-        <div style={{ padding: '16px 20px', fontSize: 10, color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace' }}>
+        <div style={{ padding: '16px 20px', fontSize: 13, color: 'var(--text2)', fontFamily: 'Noto Sans KR, sans-serif' }}>
           v1.1 · 기억보다 행동
         </div>
       </aside>

@@ -33,42 +33,42 @@ const YARD_ALLOW = new Set(['gwanje', 'gaebal', 'brainpool']);
 const S: Record<string, CSSProperties> = {
   page:        { display: 'flex', minHeight: '100vh', background: 'var(--bg)' },
   main:        { flex: 1, display: 'flex', flexDirection: 'column', maxHeight: '100vh', overflow: 'hidden', minWidth: 0 },
-  header:      { padding: '16px 28px 12px', borderBottom: '1px solid var(--border)', background: 'var(--bg2)', flexShrink: 0 },
-  title:       { fontSize: 20, fontWeight: 700, marginBottom: 2 },
-  sub:         { fontSize: 11, color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace' },
+  header:      { padding: '18px 28px 14px', borderBottom: '1px solid var(--border)', background: 'var(--bg2)', flexShrink: 0 },
+  title:       { fontSize: 24, fontWeight: 700, marginBottom: 3 },
+  sub:         { fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 },
   body:        { flex: 1, display: 'flex', overflow: 'hidden' },
-  messages:    { flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 16 },
-  text:        { fontSize: 13, color: 'var(--text)', lineHeight: 1.65, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
-  obsBox:      { marginTop: 10, padding: '8px 10px', background: 'rgba(63,185,80,0.07)', border: '1px solid rgba(63,185,80,0.2)', borderRadius: 6 },
-  obsLabel:    { fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: 'var(--accent2)', fontFamily: 'JetBrains Mono, monospace', marginBottom: 6 },
-  obsItem:     { fontSize: 12, color: 'var(--text2)', lineHeight: 1.6, paddingLeft: 2 },
-  hermesBox:   { marginTop: 10, padding: '8px 10px', background: 'rgba(88,166,255,0.07)', border: '1px solid rgba(88,166,255,0.25)', borderRadius: 6 },
-  hermesLabel: { fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: 'var(--accent)', fontFamily: 'JetBrains Mono, monospace', marginBottom: 6 },
-  hermesMeta:  { fontSize: 12, color: 'var(--text2)', lineHeight: 1.5, marginBottom: 8 },
-  hermesHint:  { fontSize: 10, color: 'var(--text3)', lineHeight: 1.45, marginBottom: 8 },
-  hermesRow:   { display: 'flex', flexWrap: 'wrap', gap: 6 },
-  hermesBtn:   { fontSize: 11, padding: '5px 10px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text2)', cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif' },
-  inputArea:   { padding: '12px 24px 16px', borderTop: '1px solid var(--border)', background: 'var(--bg2)', flexShrink: 0 },
+  messages:    { flex: 1, overflowY: 'auto', padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 18 },
+  text:        { fontSize: 16, color: 'var(--text)', lineHeight: 1.75, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+  obsBox:      { marginTop: 12, padding: '10px 12px', background: 'rgba(63,185,80,0.07)', border: '1px solid rgba(63,185,80,0.2)', borderRadius: 6 },
+  obsLabel:    { fontSize: 13, fontWeight: 700, letterSpacing: 0.3, color: 'var(--accent2)', marginBottom: 7 },
+  obsItem:     { fontSize: 14, color: 'var(--text2)', lineHeight: 1.7, paddingLeft: 2 },
+  hermesBox:   { marginTop: 12, padding: '12px 14px', background: 'rgba(88,166,255,0.07)', border: '1px solid rgba(88,166,255,0.25)', borderRadius: 6 },
+  hermesLabel: { fontSize: 13, fontWeight: 700, letterSpacing: 0.3, color: 'var(--accent)', marginBottom: 7 },
+  hermesMeta:  { fontSize: 14, color: 'var(--text2)', lineHeight: 1.65, marginBottom: 10 },
+  hermesHint:  { fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, marginBottom: 10 },
+  hermesRow:   { display: 'flex', flexWrap: 'wrap', gap: 8 },
+  hermesBtn:   { fontSize: 14, minHeight: 40, padding: '8px 12px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif' },
+  inputArea:   { padding: '14px 24px 18px', borderTop: '1px solid var(--border)', background: 'var(--bg2)', flexShrink: 0 },
   inputRow:    { display: 'flex', gap: 10, alignItems: 'flex-end' },
-  textarea:    { flex: 1, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', padding: '10px 14px', fontSize: 13, outline: 'none', resize: 'none', fontFamily: 'Noto Sans KR, sans-serif', lineHeight: 1.5, minHeight: 44, maxHeight: 140 },
-  sendBtn:     { padding: '10px 18px', background: 'var(--accent)', color: '#0D1117', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif', flexShrink: 0, height: 44 },
+  textarea:    { flex: 1, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', padding: '12px 14px', fontSize: 16, outline: 'none', resize: 'none', fontFamily: 'Noto Sans KR, sans-serif', lineHeight: 1.6, minHeight: 52, maxHeight: 160 },
+  sendBtn:     { padding: '12px 20px', background: 'var(--accent)', color: '#0D1117', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif', flexShrink: 0, minHeight: 52 },
   sendBtnOff:  { background: 'var(--bg3)', color: 'var(--text3)', cursor: 'not-allowed' },
-  hint:        { fontSize: 10, color: 'var(--text3)', marginTop: 6, fontFamily: 'JetBrains Mono, monospace' },
-  panel:       { width: 300, borderLeft: '1px solid var(--border)', background: 'var(--bg2)', display: 'flex', flexDirection: 'column', flexShrink: 0, overflowY: 'auto' },
-  panelHeader: { padding: '14px 16px 10px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  panelTitle:  { fontSize: 12, fontWeight: 700, color: 'var(--text2)', fontFamily: 'JetBrains Mono, monospace' },
-  panelBody:   { padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12, flex: 1 },
-  fieldLabel:  { fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase', color: 'var(--text3)', fontFamily: 'JetBrains Mono, monospace', marginBottom: 4 },
-  fieldInput:  { width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', padding: '7px 10px', fontSize: 12, outline: 'none', fontFamily: 'Noto Sans KR, sans-serif', boxSizing: 'border-box' },
-  fieldTA:     { width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', padding: '7px 10px', fontSize: 12, outline: 'none', resize: 'vertical', fontFamily: 'Noto Sans KR, sans-serif', lineHeight: 1.5, boxSizing: 'border-box' },
-  analyzeBtn:  { width: '100%', padding: '9px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 7, color: 'var(--text2)', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif' },
-  saveBtn:     { width: '100%', padding: '9px', background: 'var(--accent2)', border: 'none', borderRadius: 7, color: '#0D1117', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif' },
+  hint:        { fontSize: 13, color: 'var(--text2)', marginTop: 8 },
+  panel:       { width: 340, borderLeft: '1px solid var(--border)', background: 'var(--bg2)', display: 'flex', flexDirection: 'column', flexShrink: 0, overflowY: 'auto' },
+  panelHeader: { padding: '16px 20px 12px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  panelTitle:  { fontSize: 15, fontWeight: 700, color: 'var(--text)', fontFamily: 'Noto Sans KR, sans-serif' },
+  panelBody:   { padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14, flex: 1 },
+  fieldLabel:  { fontSize: 14, fontWeight: 700, letterSpacing: 0.1, color: 'var(--text2)', marginBottom: 5 },
+  fieldInput:  { width: '100%', minHeight: 44, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', padding: '9px 12px', fontSize: 15, outline: 'none', fontFamily: 'Noto Sans KR, sans-serif', boxSizing: 'border-box' },
+  fieldTA:     { width: '100%', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', padding: '10px 12px', fontSize: 15, outline: 'none', resize: 'vertical', fontFamily: 'Noto Sans KR, sans-serif', lineHeight: 1.65, boxSizing: 'border-box' },
+  analyzeBtn:  { width: '100%', minHeight: 44, padding: '10px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 7, color: 'var(--text)', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif' },
+  saveBtn:     { width: '100%', minHeight: 48, padding: '11px', background: 'var(--accent2)', border: 'none', borderRadius: 7, color: '#0D1117', fontSize: 15, fontWeight: 700, cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif' },
   saveBtnOff:  { background: 'var(--bg3)', color: 'var(--text3)', cursor: 'not-allowed' },
-  statusMsg:   { fontSize: 11, textAlign: 'center', padding: '4px 0', fontFamily: 'JetBrains Mono, monospace' },
-  clearBtn:    { background: 'none', border: '1px solid var(--border)', color: 'var(--text3)', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer', fontFamily: 'JetBrains Mono, monospace' },
-  section:     { borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 },
-  smallBtn:    { fontSize: 10, padding: '4px 8px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text2)', cursor: 'pointer', fontFamily: 'JetBrains Mono, monospace' },
-  thinking:    { alignSelf: 'flex-start', fontSize: 12, color: 'var(--text3)', fontStyle: 'italic', padding: '4px 0' },
+  statusMsg:   { fontSize: 14, lineHeight: 1.55, textAlign: 'center', padding: '6px 0', fontFamily: 'Noto Sans KR, sans-serif' },
+  clearBtn:    { background: 'none', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: 6, padding: '8px 12px', fontSize: 14, cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif' },
+  section:     { borderTop: '1px solid var(--border)', paddingTop: 14, marginTop: 4 },
+  smallBtn:    { fontSize: 14, minHeight: 40, padding: '8px 10px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', cursor: 'pointer', fontFamily: 'Noto Sans KR, sans-serif' },
+  thinking:    { alignSelf: 'flex-start', fontSize: 15, color: 'var(--text2)', fontStyle: 'italic', padding: '6px 0' },
 };
 
 function bubbleStyle(role: 'user' | 'assistant'): CSSProperties {
@@ -84,9 +84,9 @@ function bubbleStyle(role: 'user' | 'assistant'): CSSProperties {
 
 function roleLabelStyle(role: 'user' | 'assistant'): CSSProperties {
   return {
-    fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase',
+    fontSize: 13, fontWeight: 700, letterSpacing: 0.2, textTransform: 'uppercase',
     color: role === 'user' ? 'var(--accent)' : 'var(--accent2)',
-    fontFamily: 'JetBrains Mono, monospace', marginBottom: 4,
+    fontFamily: 'Noto Sans KR, sans-serif', marginBottom: 6,
   };
 }
 
@@ -463,7 +463,7 @@ export default function ChatPage() {
     <div style={S.panelBody}>
       <div>
         <div style={{ ...S.fieldLabel, color: 'var(--accent2)' }}>마당에 남기기</div>
-        <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.55, marginBottom: 8 }}>
+        <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.65, marginBottom: 10 }}>
           결정·이슈·문서 등 남길 내용만 적으세요. 초안은 직접 확인한 뒤 저장해야 마당 원본이 됩니다.
         </div>
         <div style={S.fieldLabel}>마당</div>
@@ -499,7 +499,7 @@ export default function ChatPage() {
           value={yardContent}
           onChange={(e) => setYardContent(e.target.value)}
         />
-        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: 'var(--text3)', lineHeight: 1.5, marginTop: 8 }}>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 14, color: 'var(--text2)', lineHeight: 1.6, marginTop: 10 }}>
           <input type="checkbox" checked={synthAfter} onChange={(e) => setSynthAfter(e.target.checked)} />
           원본 저장 뒤 HajunAI의 현재 이해도 다시 종합
         </label>
@@ -519,7 +519,7 @@ export default function ChatPage() {
 
       <div style={S.section}>
         <div style={S.fieldLabel}>dev_contexts (개발 핸드오프)</div>
-        <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.6, marginBottom: 8 }}>
+        <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.65, marginBottom: 10 }}>
           요약 API는 축소됨. synthesize_context 권장.
         </div>
         <button style={{ ...S.analyzeBtn, ...(analyzing ? S.saveBtnOff : {}) }}
@@ -667,9 +667,9 @@ export default function ChatPage() {
             <div style={{ ...S.hermesLabel, marginBottom: 0 }}>현재 이해</div>
             <div
               style={{
-                fontSize: 12,
-                color: 'var(--text2)',
-                lineHeight: 1.6,
+                fontSize: 15,
+                color: 'var(--text)',
+                lineHeight: 1.7,
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-word',
                 background: 'var(--bg3)',
@@ -683,7 +683,7 @@ export default function ChatPage() {
                 ? '불러오는 중…'
                 : currentUnderstanding || '(없음)'}
             </div>
-            <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+            <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.6 }}>
               이 이해를 다시 만들까요? Hermes가 자동으로 실행하지 않습니다.
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -745,14 +745,14 @@ export default function ChatPage() {
             }}
           >
             <div style={{ ...S.hermesLabel, marginBottom: 0 }}>연결 제안 · 참고 확인</div>
-            <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.55 }}>
+            <div style={{ fontSize: 14, color: 'var(--text2)', lineHeight: 1.65 }}>
               현재 이해 최대 800자를 마당 패널 초안에 덧붙입니다. 아직 저장되거나 메시지끼리 연결되지는 않습니다.
             </div>
             <div
               style={{
-                fontSize: 12,
-                color: 'var(--text2)',
-                lineHeight: 1.6,
+                fontSize: 15,
+                color: 'var(--text)',
+                lineHeight: 1.7,
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-word',
                 background: 'var(--bg3)',
@@ -767,7 +767,7 @@ export default function ChatPage() {
                 : connectError || connectUnderstanding || '아직 저장된 이해가 없습니다.'}
             </div>
             {yardContent.trim() && !connectLoading && !connectError && connectUnderstanding && (
-              <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.5 }}>
+              <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
                 기존 초안은 유지하고, 참고 내용을 아래에 덧붙입니다.
               </div>
             )}
