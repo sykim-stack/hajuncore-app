@@ -154,6 +154,7 @@ export default function ChatPage() {
   // Phase 1: connect proposal (hint only, no write)
   const [showConnectHint, setShowConnectHint] = useState(false);
   const [connectUnderstanding, setConnectUnderstanding] = useState<string | null>(null);
+  const [connectError, setConnectError] = useState<string | null>(null);
   const [connectLoading, setConnectLoading] = useState(false);
 
   const bottomRef    = useRef<HTMLDivElement>(null);
@@ -383,18 +384,18 @@ export default function ChatPage() {
   const acceptConnect = async () => {
     setConnectLoading(true);
     setConnectUnderstanding(null);
+    setConnectError(null);
     setShowConnectHint(true);
     try {
       const res = await fetch('/api/hajun?action=contexts');
       const json = await res.json();
-      const t =
-        (json?.payload?.understanding && String(json.payload.understanding).trim()) ||
-        '(아직 저장된 이해가 없습니다)';
-      setConnectUnderstanding(t);
+      if (!res.ok || json?._error) {
+        throw new Error(json?._error || `HTTP ${res.status}`);
+      }
+      const text = String(json?.payload?.understanding || '').trim();
+      setConnectUnderstanding(text || null);
     } catch (e) {
-      setConnectUnderstanding(
-        `이해를 불러오지 못했습니다: ${e instanceof Error ? e.message : String(e)}`
-      );
+      setConnectError(`이해를 불러오지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setConnectLoading(false);
     }
@@ -462,8 +463,8 @@ export default function ChatPage() {
     <div style={S.panelBody}>
       <div>
         <div style={{ ...S.fieldLabel, color: 'var(--accent2)' }}>마당에 남기기</div>
-        <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.5, marginBottom: 8 }}>
-          결정·이슈·문서 등 원본으로 남길 때만. 잡담은 남기지 않습니다.
+        <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.55, marginBottom: 8 }}>
+          결정·이슈·문서 등 남길 내용만 적으세요. 초안은 직접 확인한 뒤 저장해야 마당 원본이 됩니다.
         </div>
         <div style={S.fieldLabel}>마당</div>
         <select style={S.fieldInput} value={yardKey} onChange={(e) => setYardKey(e.target.value)}>
@@ -494,13 +495,13 @@ export default function ChatPage() {
         </div>
         <textarea
           style={{ ...S.fieldTA, minHeight: 88 }}
-          placeholder="마당에 남길 원문..."
+          placeholder="초안을 편집하세요. 아직 마당에 저장되지 않았습니다."
           value={yardContent}
           onChange={(e) => setYardContent(e.target.value)}
         />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: 'var(--text3)', lineHeight: 1.5, marginTop: 8 }}>
           <input type="checkbox" checked={synthAfter} onChange={(e) => setSynthAfter(e.target.checked)} />
-          저장 후 이해 종합(synthesize)
+          원본 저장 뒤 HajunAI의 현재 이해도 다시 종합
         </label>
         <button
           style={{ ...S.saveBtn, marginTop: 8, ...(yardSaving || !yardContent.trim() || !roomKey ? S.saveBtnOff : {}) }}
@@ -743,9 +744,9 @@ export default function ChatPage() {
               gap: 12,
             }}
           >
-            <div style={{ ...S.hermesLabel, marginBottom: 0 }}>연결 제안 · 실행 아님</div>
-            <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.5 }}>
-              현재 이해와 연결할 수 있습니다. Hermes가 자동으로 링크하거나 저장하지 않습니다.
+            <div style={{ ...S.hermesLabel, marginBottom: 0 }}>연결 제안 · 참고 확인</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.55 }}>
+              현재 이해 최대 800자를 마당 패널 초안에 덧붙입니다. 아직 저장되거나 메시지끼리 연결되지는 않습니다.
             </div>
             <div
               style={{
@@ -761,8 +762,15 @@ export default function ChatPage() {
                 minHeight: 80,
               }}
             >
-              {connectLoading ? '불러오는 중…' : connectUnderstanding || '(없음)'}
+              {connectLoading
+                ? '현재 이해를 불러오는 중…'
+                : connectError || connectUnderstanding || '아직 저장된 이해가 없습니다.'}
             </div>
+            {yardContent.trim() && !connectLoading && !connectError && connectUnderstanding && (
+              <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.5 }}>
+                기존 초안은 유지하고, 참고 내용을 아래에 덧붙입니다.
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button
                 type="button"
@@ -770,27 +778,35 @@ export default function ChatPage() {
                 onClick={() => {
                   setShowConnectHint(false);
                   setConnectUnderstanding(null);
+                  setConnectError(null);
                 }}
               >
                 닫기
               </button>
               <button
                 type="button"
-                style={S.hermesBtn}
+                style={{ ...S.hermesBtn, ...(connectLoading || !!connectError || !connectUnderstanding ? S.saveBtnOff : {}) }}
+                disabled={connectLoading || !!connectError || !connectUnderstanding}
                 onClick={() => {
                   const seed = (connectUnderstanding || '').trim();
-                  if (seed && seed !== '(아직 저장된 이해가 없습니다)') {
-                    setYardContent((prev) =>
-                      prev.trim() ? prev : `[연결 참고]\n${seed.slice(0, 800)}`
-                    );
+                  if (seed) {
+                    const reference = `[연결 참고]\n${seed.slice(0, 800)}`;
+                    if (yardContent.includes(reference)) {
+                      setYardStatus('✅ 이 참고 내용은 이미 초안에 있습니다. 아직 마당 원본으로 저장되지는 않았습니다.');
+                    } else {
+                      setYardContent((prev) =>
+                        prev.trim() ? `${prev.trim()}\n\n${reference}` : reference
+                      );
+                      setYardStatus('✅ 참고 내용을 초안에 덧붙였습니다. 아직 마당 원본으로 저장되지는 않았습니다.');
+                    }
                     setPanelOpen(true);
-                    setYardStatus('Hermes 제안: 연결 - 참고 내용을 마당 패널에 넣었습니다.');
                   }
                   setShowConnectHint(false);
                   setConnectUnderstanding(null);
+                  setConnectError(null);
                 }}
               >
-                참고로 마당 패널에 넣기
+                참고 내용을 초안으로 가져오기
               </button>
             </div>
           </div>
