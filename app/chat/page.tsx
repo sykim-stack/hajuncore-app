@@ -151,6 +151,11 @@ export default function ChatPage() {
   const [understandingLoading, setUnderstandingLoading] = useState(false);
   const [resynthLoading, setResynthLoading] = useState(false);
 
+  // Phase 1: connect proposal (hint only, no write)
+  const [showConnectHint, setShowConnectHint] = useState(false);
+  const [connectUnderstanding, setConnectUnderstanding] = useState<string | null>(null);
+  const [connectLoading, setConnectLoading] = useState(false);
+
   const bottomRef    = useRef<HTMLDivElement>(null);
   const textareaRef  = useRef<HTMLTextAreaElement>(null);
 
@@ -371,6 +376,27 @@ export default function ChatPage() {
       textareaRef.current.style.height = 'auto';
       textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 140) + 'px';
       textareaRef.current.focus();
+    }
+  };
+
+  /** Phase 1: 연결 제안 - 현재 이해만 보여줌. 자동 링크/write 없음. */
+  const acceptConnect = async () => {
+    setConnectLoading(true);
+    setConnectUnderstanding(null);
+    setShowConnectHint(true);
+    try {
+      const res = await fetch('/api/hajun?action=contexts');
+      const json = await res.json();
+      const t =
+        (json?.payload?.understanding && String(json.payload.understanding).trim()) ||
+        '(아직 저장된 이해가 없습니다)';
+      setConnectUnderstanding(t);
+    } catch (e) {
+      setConnectUnderstanding(
+      setConnectUnderstanding(
+        `이해를 불러오지 못했습니다: ${e instanceof Error ? e.message : String(e)}`
+      );
+      setConnectLoading(false);
     }
   };
 
@@ -596,6 +622,11 @@ export default function ChatPage() {
                             이해갱신 제안 받기
                           </button>
                         )}
+                        {(m.hermes.candidates || []).includes('연결') && (
+                          <button type="button" style={S.hermesBtn} onClick={acceptConnect}>
+                            연결 제안 보기
+                          </button>
+                        )}
                       </div>
                     </div>
                   )}
@@ -679,6 +710,92 @@ export default function ChatPage() {
                 disabled={resynthLoading || understandingLoading}
               >
                 {resynthLoading ? '실행 중…' : '이 이해를 다시 만들기'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Phase 1: 연결 제안 - 현재 이해 표시만. write/링크 없음 */}
+      {showConnectHint && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 50,
+          }}
+        >
+          <div
+            style={{
+              width: 'min(480px, 92vw)',
+              maxHeight: '80vh',
+              overflowY: 'auto',
+              background: 'var(--bg2)',
+              border: '1px solid var(--border)',
+              borderRadius: 10,
+              padding: '16px 18px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+            }}
+          >
+            <div style={{ ...S.hermesLabel, marginBottom: 0 }}>연결 제안 · 실행 아님</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.5 }}>
+              현재 이해·원본과 연결할 수 있습니다. Hermes가 자동으로 링크하거나 저장하지 않습니다.
+              마당에 남길 때 아래 내용을 참고하세요.
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: 'var(--text2)',
+                lineHeight: 1.6,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                background: 'var(--bg3)',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                padding: '10px 12px',
+                minHeight: 80,
+              }}
+            >
+              {connectLoading
+                ? '불러오는 중…'
+                : connectUnderstanding || '(없음)'}
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                type="button"
+                type="button"
+                style={S.hermesBtn}
+                onClick={() => {
+                  setShowConnectHint(false);
+                  setConnectUnderstanding(null);
+                }}
+              >
+                type="button"
+              </button>
+              <button
+                type="button"
+                style={S.hermesBtn}
+                onClick={() => {
+                  const seed = (connectUnderstanding || '').trim();
+                  if (seed && seed !== '(아직 저장된 이해가 없습니다)') {
+                        : `[연결 참고]\n${seed.slice(0, 800)}`
+                      prev.trim()
+                        ? prev
+                        : `[연결 참고]\n${seed.slice(0, 800)}`
+                    );
+                    setPanelOpen(true);
+                    setYardStatus('Hermes 제안: 연결 - 참고 내용을 마당 패널에 넣었습니다. 필요 시 수정 후 남기세요.');
+                  }
+                  setShowConnectHint(false);
+                  setConnectUnderstanding(null);
+                }}
+              >
+                참고로 마당 패널에 넣기
               </button>
             </div>
           </div>
