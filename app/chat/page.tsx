@@ -745,8 +745,7 @@ export default function ChatPage() {
           >
             <div style={{ ...S.hermesLabel, marginBottom: 0 }}>연결 제안 · 실행 아님</div>
             <div style={{ fontSize: 12, color: 'var(--text3)', lineHeight: 1.5 }}>
-              현재 이해·원본과 연결할 수 있습니다. Hermes가 자동으로 링크하거나 저장하지 않습니다.
-              마당에 남길 때 아래 내용을 참고하세요.
+              현재 이해와 연결할 수 있습니다. Hermes가 자동으로 링크하거나 저장하지 않습니다.
             </div>
             <div
               style={{
@@ -762,9 +761,7 @@ export default function ChatPage() {
                 minHeight: 80,
               }}
             >
-              {connectLoading
-                ? '불러오는 중…'
-                : connectUnderstanding || '(없음)'}
+              {connectLoading ? '불러오는 중…' : connectUnderstanding || '(없음)'}
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 type="button"
@@ -782,14 +779,12 @@ export default function ChatPage() {
                 style={S.hermesBtn}
                 onClick={() => {
                   const seed = (connectUnderstanding || '').trim();
-                  if (seed && seed !== '(아직 저장된 이해가 없습니다)') {
-                        : `[연결 참고]\n${seed.slice(0, 800)}`
-                      prev.trim()
-                        ? prev
-                        : `[연결 참고]\n${seed.slice(0, 800)}`
+                      prev.trim() ? prev : `[연결 참고]\n${seed.slice(0, 800)}`
+                    setYardContent((prev) =>
+                      prev.trim() ? prev : `[연결 참고]\n${seed.slice(0, 800)}`
                     );
                     setPanelOpen(true);
-                    setYardStatus('Hermes 제안: 연결 - 참고 내용을 마당 패널에 넣었습니다. 필요 시 수정 후 남기세요.');
+                    setYardStatus('Hermes 제안: 연결 - 참고 내용을 마당 패널에 넣었습니다.');
                   }
                   setShowConnectHint(false);
                   setConnectUnderstanding(null);
