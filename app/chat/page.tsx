@@ -393,9 +393,9 @@ export default function ChatPage() {
       setConnectUnderstanding(t);
     } catch (e) {
       setConnectUnderstanding(
-      setConnectUnderstanding(
         `이해를 불러오지 못했습니다: ${e instanceof Error ? e.message : String(e)}`
       );
+    } finally {
       setConnectLoading(false);
     }
   };
