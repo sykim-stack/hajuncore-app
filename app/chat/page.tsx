@@ -764,7 +764,7 @@ export default function ChatPage() {
               {connectLoading ? '불러오는 중…' : connectUnderstanding || '(없음)'}
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                type="button"
+              <button
                 type="button"
                 style={S.hermesBtn}
                 onClick={() => {
@@ -772,14 +772,14 @@ export default function ChatPage() {
                   setConnectUnderstanding(null);
                 }}
               >
-                type="button"
+                닫기
               </button>
               <button
                 type="button"
                 style={S.hermesBtn}
                 onClick={() => {
                   const seed = (connectUnderstanding || '').trim();
-                      prev.trim() ? prev : `[연결 참고]\n${seed.slice(0, 800)}`
+                  if (seed && seed !== '(아직 저장된 이해가 없습니다)') {
                     setYardContent((prev) =>
                       prev.trim() ? prev : `[연결 참고]\n${seed.slice(0, 800)}`
                     );
