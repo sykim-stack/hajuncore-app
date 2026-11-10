@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import Sidebar from '@/components/Sidebar';
+import { MSG_TYPE_LABEL } from '@/types/hajun';
 
 type HermesInfo = {
   hasActionUnit: boolean;
@@ -26,6 +27,14 @@ type ContextDraft = {
 
 type YardOpt = { key: string; name?: string };
 type RoomOpt = { key: string; name?: string; id?: string };
+type RoomMessage = {
+  id: string;
+  content: string;
+  author_name?: string;
+  author_type?: string;
+  msg_type?: string;
+  created_at?: string;
+};
 
 const STORAGE_KEY = 'hajunai_chat_messages';
 const YARD_ALLOW = new Set(['gwanje', 'gaebal', 'brainpool']);
@@ -122,6 +131,18 @@ function saveMessages(msgs: Message[]) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(msgs)); } catch { /* 무시 */ }
 }
 
+function previewMessage(content: string) {
+  const text = content.replace(/\s+/g, ' ').trim();
+  return text.length > 150 ? `${text.slice(0, 150)}…` : text || '(빈 메시지)';
+}
+
+function formatReferenceTime(value?: string) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
 export default function ChatPage() {
   const [messages, setMessages]   = useState<Message[]>([INIT_MESSAGE]);
   const [hydrated, setHydrated]   = useState(false);
@@ -144,6 +165,11 @@ export default function ChatPage() {
   const [yardSaving, setYardSaving] = useState(false);
   const [yardStatus, setYardStatus] = useState('');
   const [synthAfter, setSynthAfter] = useState(true);
+  const [roomMessages, setRoomMessages] = useState<RoomMessage[]>([]);
+  const [roomMessagesLoading, setRoomMessagesLoading] = useState(false);
+  const [roomMessagesError, setRoomMessagesError] = useState('');
+  const [selectedRefIds, setSelectedRefIds] = useState<string[]>([]);
+  const [showRefPicker, setShowRefPicker] = useState(false);
 
   // Phase 1: 이해갱신 승인 (Option A)
   const [showUnderstandingConfirm, setShowUnderstandingConfirm] = useState(false);
@@ -159,6 +185,11 @@ export default function ChatPage() {
 
   const bottomRef    = useRef<HTMLDivElement>(null);
   const textareaRef  = useRef<HTMLTextAreaElement>(null);
+  const selectedRoomId = rooms.find((room) => room.key === roomKey)?.id || '';
+  const selectableRoomMessages = roomMessages.slice(-40).reverse();
+  const selectedRoomMessages = selectedRefIds
+    .map((id) => roomMessages.find((message) => message.id === id))
+    .filter((message): message is RoomMessage => Boolean(message));
 
   useEffect(() => {
     setMessages(loadMessages());
@@ -213,6 +244,40 @@ export default function ChatPage() {
       } catch { /* ignore */ }
     })();
   }, [yardKey]);
+
+  useEffect(() => {
+    setRoomMessages([]);
+    setSelectedRefIds([]);
+    setRoomMessagesError('');
+    setShowRefPicker(false);
+    if (!selectedRoomId) {
+      setRoomMessagesLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setRoomMessagesLoading(true);
+    (async () => {
+      try {
+        const res = await fetch(`/api/hajun?action=view_room&room_id=${encodeURIComponent(selectedRoomId)}`, {
+          signal: controller.signal,
+        });
+        const json = await res.json();
+        if (!res.ok || json?._error) throw new Error(json?._error || `HTTP ${res.status}`);
+        const fetched = Array.isArray(json?.payload?.messages) ? json.payload.messages as RoomMessage[] : [];
+        setRoomMessages(fetched.filter((message) =>
+          message && typeof message.id === 'string' && typeof message.content === 'string'
+        ));
+      } catch (e) {
+        if (!controller.signal.aborted) {
+          setRoomMessagesError(`기존 메시지를 불러오지 못했습니다: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      } finally {
+        if (!controller.signal.aborted) setRoomMessagesLoading(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [selectedRoomId]);
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
@@ -283,6 +348,12 @@ export default function ChatPage() {
     else setYardStatus('최근 HajunAI 답이 없습니다');
   };
 
+  const toggleReference = (id: string) => {
+    setSelectedRefIds((current) =>
+      current.includes(id) ? current.filter((refId) => refId !== id) : [...current, id]
+    );
+  };
+
   const saveToYard = async () => {
     const content = yardContent.trim();
     if (!content || !yardKey || !roomKey || yardSaving) return;
@@ -299,14 +370,22 @@ export default function ChatPage() {
           author_name: 'user',
           msg_type: msgType,
           content,
-          ref_ids: [],
+          ref_ids: selectedRefIds,
         }),
       });
       const json = await res.json();
       if (json._error) {
         setYardStatus(`❌ ${json._error}`);
       } else {
-        setYardStatus(`✅ ${yardKey}/${roomKey}에 원본 저장`);
+        const savedRefIds = Array.isArray(json.payload?.ref_ids) ? json.payload.ref_ids as string[] : [];
+        const refsConfirmed = selectedRefIds.length === savedRefIds.length &&
+          selectedRefIds.every((id) => savedRefIds.includes(id));
+        const saveStatus = selectedRefIds.length === 0
+          ? `✅ ${yardKey}/${roomKey}에 원본 저장 · 참조 없음`
+          : refsConfirmed
+            ? `✅ ${yardKey}/${roomKey}에 원본 저장 · 참조 ${selectedRefIds.length}건 확인`
+            : `⚠ 원본은 저장됐지만 선택한 참조를 응답에서 확인하지 못했습니다. 중복 저장하지 말고 확인해 주세요.`;
+        setYardStatus(saveStatus);
         if (synthAfter) {
           try {
             await fetch('/api/hajun?action=synthesize_context', {
@@ -314,9 +393,9 @@ export default function ChatPage() {
               headers: { 'Content-Type': 'application/json' },
               body: '{}',
             });
-            setYardStatus(`✅ ${yardKey}/${roomKey} 저장 · 이해 종합 실행`);
+            setYardStatus(`${saveStatus} · 이해 종합 실행`);
           } catch {
-            setYardStatus(`✅ 저장됨 (종합 호출 실패 — 나중에 synthesize 가능)`);
+            setYardStatus(`${saveStatus} (종합 호출 실패 — 나중에 synthesize 가능)`);
           }
         }
       }
@@ -467,7 +546,15 @@ export default function ChatPage() {
           결정·이슈·문서 등 남길 내용만 적으세요. 초안은 직접 확인한 뒤 저장해야 마당 원본이 됩니다.
         </div>
         <div style={S.fieldLabel}>마당</div>
-        <select style={S.fieldInput} value={yardKey} onChange={(e) => setYardKey(e.target.value)}>
+        <select
+          style={S.fieldInput}
+          value={yardKey}
+          onChange={(e) => {
+            setSelectedRefIds([]);
+            setShowRefPicker(false);
+            setYardKey(e.target.value);
+          }}
+        >
           {(yards.length ? yards : [
             { key: 'gwanje', name: '관제' },
             { key: 'gaebal', name: '개발' },
@@ -477,7 +564,16 @@ export default function ChatPage() {
           ))}
         </select>
         <div style={{ ...S.fieldLabel, marginTop: 8 }}>방</div>
-        <select style={S.fieldInput} value={roomKey} onChange={(e) => setRoomKey(e.target.value)} disabled={!rooms.length}>
+        <select
+          style={S.fieldInput}
+          value={roomKey}
+          onChange={(e) => {
+            setSelectedRefIds([]);
+            setShowRefPicker(false);
+            setRoomKey(e.target.value);
+          }}
+          disabled={!rooms.length}
+        >
           {!rooms.length && <option value="">방 목록 없음</option>}
           {rooms.map((r) => (
             <option key={r.key} value={r.key}>{r.name || r.key}</option>
@@ -499,6 +595,84 @@ export default function ChatPage() {
           value={yardContent}
           onChange={(e) => setYardContent(e.target.value)}
         />
+        <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <div style={S.fieldLabel}>이 방에서 참조할 메시지 (선택)</div>
+            <button
+              type="button"
+              style={{ ...S.smallBtn, flexShrink: 0 }}
+              onClick={() => setShowRefPicker((open) => !open)}
+              disabled={!selectedRoomId || roomMessagesLoading || !!roomMessagesError}
+            >
+              {showRefPicker ? '목록 닫기' : `원본 선택 (${selectedRefIds.length})`}
+            </button>
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.55, marginBottom: 8 }}>
+            선택한 메시지와의 참조가 새 원본에 함께 기록됩니다. 기존 메시지는 바뀌지 않습니다.
+          </div>
+          {selectedRoomMessages.length > 0 ? (
+            <div style={{ padding: 10, border: '1px solid var(--accent)', borderRadius: 6, background: 'rgba(88,166,255,0.08)' }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', marginBottom: 8 }}>
+                저장 전 미리보기 · {selectedRoomMessages.length}건
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {selectedRoomMessages.map((message) => (
+                  <div key={message.id} style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.5 }}>
+                    <div style={{ color: 'var(--text)', fontWeight: 600 }}>
+                      {message.author_name || message.author_type || '메시지'}
+                      {message.msg_type ? ` · ${MSG_TYPE_LABEL[message.msg_type as keyof typeof MSG_TYPE_LABEL] || message.msg_type}` : ''}
+                      {formatReferenceTime(message.created_at) ? ` · ${formatReferenceTime(message.created_at)}` : ''}
+                    </div>
+                    <div>{previewMessage(message.content)}</div>
+                  </div>
+                ))}
+              </div>
+              <button type="button" style={{ ...S.smallBtn, marginTop: 8 }} onClick={() => setSelectedRefIds([])}>
+                참조 전체 해제
+              </button>
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 8 }}>선택한 참조가 없습니다. 참조 없이 저장됩니다.</div>
+          )}
+          {roomMessagesLoading && <div style={{ fontSize: 13, color: 'var(--text2)' }}>선택한 방의 기존 메시지를 불러오는 중…</div>}
+          {roomMessagesError && <div style={{ fontSize: 13, color: 'var(--warn)', lineHeight: 1.5 }}>{roomMessagesError}</div>}
+          {showRefPicker && !roomMessagesLoading && !roomMessagesError && (
+            <div style={{ marginTop: 8, maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontSize: 13, color: 'var(--text2)' }}>이 방의 최근 40개 메시지에서 참조할 원본을 선택하세요.</div>
+              {selectableRoomMessages.length === 0 ? (
+                <div style={{ fontSize: 14, color: 'var(--text2)', padding: '12px 0' }}>이 방에는 선택할 기존 메시지가 없습니다.</div>
+              ) : selectableRoomMessages.map((message) => {
+                const checked = selectedRefIds.includes(message.id);
+                return (
+                  <label
+                    key={message.id}
+                    style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 10, padding: 10,
+                      border: `1px solid ${checked ? 'var(--accent)' : 'var(--border)'}`,
+                      borderRadius: 6, background: checked ? 'rgba(88,166,255,0.1)' : 'var(--bg3)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleReference(message.id)}
+                      style={{ width: 18, height: 18, margin: '2px 0 0', flexShrink: 0 }}
+                    />
+                    <span style={{ minWidth: 0, fontSize: 14, color: 'var(--text)', lineHeight: 1.5 }}>
+                      <span style={{ display: 'block', color: 'var(--text2)', fontSize: 13, fontWeight: 700 }}>
+                        {message.author_name || message.author_type || '메시지'}
+                        {message.msg_type ? ` · ${MSG_TYPE_LABEL[message.msg_type as keyof typeof MSG_TYPE_LABEL] || message.msg_type}` : ''}
+                        {formatReferenceTime(message.created_at) ? ` · ${formatReferenceTime(message.created_at)}` : ''}
+                      </span>
+                      <span style={{ display: 'block' }}>{previewMessage(message.content)}</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
         <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 14, color: 'var(--text2)', lineHeight: 1.6, marginTop: 10 }}>
           <input type="checkbox" checked={synthAfter} onChange={(e) => setSynthAfter(e.target.checked)} />
           원본 저장 뒤 HajunAI의 현재 이해도 다시 종합
