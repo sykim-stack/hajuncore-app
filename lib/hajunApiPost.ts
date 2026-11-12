@@ -48,7 +48,6 @@ async function callGroqWithFallback(
     }
     return { ok: true, text }
   } catch (e: any) {
-    // Gemini fallback optional
     const geminiKey = process.env.GEMINI_API_KEY
     if (geminiKey) {
       try {
@@ -90,7 +89,6 @@ function buildRoomContext(room: HajunRoomRow | null): string {
   return lines.join('\n')
 }
 
-/** Hermes Phase 0: 제안만, 실행 금지 — judgment 힌트 문자열 */
 function buildHermesHint(judgment: any): string {
   if (!judgment || typeof judgment !== 'object') return ''
   try {
@@ -170,7 +168,6 @@ export async function POST(req: Request) {
     }
 
     if (action === 'chat' || action === 'message') {
-      // 레거시 alias → ai_respond와 동일 경로
       const message = String(body.message || body.text || '').trim()
       if (!message) {
         return Response.json({ _error: 'message_required', traceId }, { status: 200 })
@@ -248,7 +245,6 @@ export async function POST(req: Request) {
       return Response.json({ data: { suggestions: aiResult.text }, traceId }, { status: 200 })
     }
 
-    // product meta helpers delegated above; keep soft-fail for unknown
     if (action === 'analyze_product' || action === 'product_insight') {
       const title = body.title || body.product_title || ''
       const desc = body.description || body.product_description || ''
