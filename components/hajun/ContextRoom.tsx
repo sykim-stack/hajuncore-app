@@ -72,6 +72,11 @@ export default function ContextRoom({ yardKey, roomKey }: { yardKey: string; roo
   const toggleRef = (id: string) => {
     setRefIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
+  /** 최근 N건을 참조로 일괄 선택 (테스트·검증용). 최신 메시지부터 역순. */
+  const selectRecentRefs = (n: number) => {
+    const ids = [...messages].slice(-n).map((m) => m.id).filter(Boolean);
+    setRefIds(ids);
+  };
   const chipLabel = (m: HajunMessage) => {
     const body = (m.content || '').replace(/\s+/g, ' ').trim();
     return body.length > 36 ? body.slice(0, 36) + '…' : body || '(빈 메시지)';
@@ -91,8 +96,9 @@ export default function ContextRoom({ yardKey, roomKey }: { yardKey: string; roo
       const json = await res.json();
       if (json._error) setErrMsg(json._error);
       else {
+        const savedCount = Array.isArray(json.payload?.ref_ids) ? json.payload.ref_ids.length : refIds.length;
         setContent(''); clearRefs();
-        setOkMsg(refIds.length ? `저장됨 · 참조 ${refIds.length}건` : '저장됨');
+        setOkMsg(savedCount ? `저장됨 · 참조 ${savedCount}건` : '저장됨');
         await load();
       }
     } catch (e) {
@@ -218,7 +224,7 @@ export default function ContextRoom({ yardKey, roomKey }: { yardKey: string; roo
                   <button type="button"
                     style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: 4, padding: '2px 8px', fontSize: 10, cursor: 'pointer', fontFamily: 'JetBrains Mono, monospace' }}
                     onClick={() => toggleRef(m.id)}>
-                    {selected ? '참조 해제' : '이어가기'}
+                    {selected ? '참조 해제' : '참조에 추가'}
                   </button>
                 </div>
               </div>
@@ -235,17 +241,29 @@ export default function ContextRoom({ yardKey, roomKey }: { yardKey: string; roo
             <input style={{ ...S.input, width: 120 }} value={authorName} onChange={(e) => setAuthorName(e.target.value)} placeholder="작성자" />
           </div>
 
-          <div style={{ fontSize: 10, color: 'var(--text3)', marginBottom: 6, fontFamily: 'JetBrains Mono, monospace' }}>
-            참조할 이전 메시지 선택 · {refIds.length}건
+          <div style={{ fontSize: 10, marginBottom: 6, fontFamily: 'JetBrains Mono, monospace', color: refIds.length > 0 ? 'var(--accent)' : 'var(--text3)', display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+            <span>참조할 이전 메시지 선택 · {refIds.length}건</span>
+            <button type="button"
+              style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: 4, padding: '2px 8px', fontSize: 10, cursor: 'pointer' }}
+              onClick={() => selectRecentRefs(35)}
+              title="최근 35건을 참조로 일괄 선택">
+              최근 35건 선택
+            </button>
+            <button type="button"
+              style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: 4, padding: '2px 8px', fontSize: 10, cursor: 'pointer' }}
+              onClick={() => selectRecentRefs(10)}
+              title="최근 10건 선택">
+              최근 10건
+            </button>
             {refIds.length > 0 && (
               <button type="button"
-                style={{ marginLeft: 8, background: 'none', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: 4, padding: '2px 8px', fontSize: 10, cursor: 'pointer' }}
+                style={{ background: 'none', border: '1px solid var(--border)', color: 'var(--text2)', borderRadius: 4, padding: '2px 8px', fontSize: 10, cursor: 'pointer' }}
                 onClick={clearRefs}>
                 전체 해제
               </button>
             )}
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 88, overflowY: 'auto', marginBottom: 10, padding: '2px 0' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 140, overflowY: 'auto', marginBottom: 10, padding: '2px 0' }}>
             {chipMessages.map((m) => {
               const on = refIds.includes(m.id);
               return (
