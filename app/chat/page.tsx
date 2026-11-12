@@ -186,7 +186,7 @@ export default function ChatPage() {
   const bottomRef    = useRef<HTMLDivElement>(null);
   const textareaRef  = useRef<HTMLTextAreaElement>(null);
   const selectedRoomId = rooms.find((room) => room.key === roomKey)?.id || '';
-  const selectableRoomMessages = roomMessages.slice(-40).reverse();
+  const selectableRoomMessages = roomMessages.slice(-80).reverse();
   const selectedRoomMessages = selectedRefIds
     .map((id) => roomMessages.find((message) => message.id === id))
     .filter((message): message is RoomMessage => Boolean(message));
@@ -638,7 +638,7 @@ export default function ChatPage() {
           {roomMessagesError && <div style={{ fontSize: 13, color: 'var(--warn)', lineHeight: 1.5 }}>{roomMessagesError}</div>}
           {showRefPicker && !roomMessagesLoading && !roomMessagesError && (
             <div style={{ marginTop: 8, maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ fontSize: 13, color: 'var(--text2)' }}>이 방의 최근 40개 메시지에서 참조할 원본을 선택하세요.</div>
+              <div style={{ fontSize: 13, color: 'var(--text2)' }}>이 방의 최근 80개 메시지에서 참조할 원본을 선택하세요.</div>
               {selectableRoomMessages.length === 0 ? (
                 <div style={{ fontSize: 14, color: 'var(--text2)', padding: '12px 0' }}>이 방에는 선택할 기존 메시지가 없습니다.</div>
               ) : selectableRoomMessages.map((message) => {
