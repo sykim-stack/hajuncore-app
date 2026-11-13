@@ -10,12 +10,24 @@ type HermesInfo = {
   primary?: string;
 };
 
+type HermesExec = {
+  session_id: string;
+  status: string;
+  duration_ms?: number;
+  tokens?: number;
+};
+
 type Message = {
   role: 'user' | 'assistant';
   content: string;
   observations?: string[];
   /** Phase 1: 제안만. 실행은 사람 승인 후 기존 경로. */
   hermes?: HermesInfo;
+  /**
+   * 메스(Hermes Agent)가 이 PC에서 실제로 실행한 결과.
+   * 사람이 「메스에게 실행」을 누른 경우에만 붙는다. 자동 실행 없음.
+   */
+  exec?: HermesExec;
 };
 
 type ContextDraft = {
@@ -37,6 +49,8 @@ type RoomMessage = {
 };
 
 const STORAGE_KEY = 'hajunai_chat_messages';
+/** 메스(Hermes Agent) 실행 세션 — 이어서 시키기 위해 브라우저에만 보관한다. DB 저장 아님. */
+const EXEC_SESSION_KEY = 'hajunai_hermes_session';
 const YARD_ALLOW = new Set(['gwanje', 'gaebal', 'brainpool']);
 
 const S: Record<string, CSSProperties> = {
@@ -183,6 +197,10 @@ export default function ChatPage() {
   const [connectError, setConnectError] = useState<string | null>(null);
   const [connectLoading, setConnectLoading] = useState(false);
 
+  // 메스(실행) — 제안과 분리된 상태. 사람이 버튼을 눌러야만 채워진다.
+  const [runLoading, setRunLoading]       = useState(false);
+  const [execSessionId, setExecSessionId] = useState('');
+
   const bottomRef    = useRef<HTMLDivElement>(null);
   const textareaRef  = useRef<HTMLTextAreaElement>(null);
   const selectedRoomId = rooms.find((room) => room.key === roomKey)?.id || '';
@@ -328,6 +346,50 @@ export default function ChatPage() {
     } catch (e) {
       setMessages(prev => [...prev, { role: 'assistant', content: `네트워크 오류: ${e instanceof Error ? e.message : String(e)}` }]);
     } finally { setLoading(false); }
+  };
+
+  /**
+   * 사람이 버튼을 누를 때만 실행된다. 제안이 아니라 실행이다.
+   * 답을 만드는 주체가 Groq 이 아니라 이 PC의 메스(Hermes Agent)라는 점이 send() 와 다르다.
+   * session_id 를 브라우저에 남겨 다음 실행이 같은 대화를 이어간다.
+   */
+  const runOnHermes = async () => {
+    const msg = input.trim();
+    if (!msg || runLoading) return;
+    const sessionId = execSessionId || localStorage.getItem(EXEC_SESSION_KEY) || '';
+    setMessages(prev => [...prev, { role: 'user', content: msg }]);
+    setInput('');
+    if (textareaRef.current) textareaRef.current.style.height = '44px';
+    setRunLoading(true);
+    try {
+      const res = await fetch('/api/hermes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: msg, session_id: sessionId || undefined }),
+      });
+      const json = await res.json();
+      if (json._error) {
+        setMessages(prev => [...prev, { role: 'assistant', content: `메스 실행 오류: ${json._error}` }]);
+        return;
+      }
+      const p = json.payload || {};
+      if (p.session_id) {
+        setExecSessionId(String(p.session_id));
+        localStorage.setItem(EXEC_SESSION_KEY, String(p.session_id));
+      }
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: p.text || '(응답 없음)',
+        exec: {
+          session_id: String(p.session_id || ''),
+          status: String(p.status || ''),
+          duration_ms: typeof p.duration_ms === 'number' ? p.duration_ms : undefined,
+          tokens: typeof p.usage?.total === 'number' ? p.usage.total : undefined,
+        },
+      }]);
+    } catch (e) {
+      setMessages(prev => [...prev, { role: 'assistant', content: `메스 실행 네트워크 오류: ${e instanceof Error ? e.message : String(e)}` }]);
+    } finally { setRunLoading(false); }
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -761,6 +823,26 @@ export default function ChatPage() {
                 <div key={i} style={bubbleStyle(m.role)}>
                   <div style={roleLabelStyle(m.role)}>{m.role === 'user' ? '나' : 'HajunAI'}</div>
                   <div style={S.text}>{m.content}</div>
+                  {m.exec && (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        padding: '8px 10px',
+                        border: '1px solid var(--border)',
+                        borderRadius: 6,
+                        background: 'var(--bg3)',
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)', marginBottom: 4 }}>
+                        메스 실행 결과 · 이 PC에서 실제로 돌았습니다
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', lineHeight: 1.5 }}>
+                        세션 {m.exec.session_id || '—'} · {m.exec.status || '—'}
+                        {typeof m.exec.duration_ms === 'number' ? ` · ${(m.exec.duration_ms / 1000).toFixed(1)}초` : ''}
+                        {typeof m.exec.tokens === 'number' ? ` · ${m.exec.tokens} 토큰` : ''}
+                      </div>
+                    </div>
+                  )}
                   {m.observations && m.observations.length > 0 && (
                     <div style={S.obsBox}>
                       <div style={S.obsLabel}>관찰</div>
@@ -997,6 +1079,24 @@ export default function ChatPage() {
                   onClick={send} disabled={loading || !input.trim()}>
                   전송
                 </button>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  style={{
+                    ...S.hermesBtn,
+                    ...(runLoading || loading || !input.trim() ? S.sendBtnOff : {}),
+                  }}
+                  onClick={runOnHermes}
+                  disabled={runLoading || loading || !input.trim()}
+                >
+                  {runLoading ? '메스 실행 중…' : '메스에게 실행 (이 PC)'}
+                </button>
+                <span style={{ ...S.hint, marginTop: 0 }}>
+                  {execSessionId
+                    ? `세션 ${execSessionId} 이어감 · 자동 실행 없음`
+                    : '사람이 누를 때만 실행 · 자동 실행 없음'}
+                </span>
               </div>
               <div style={S.hint}>브라우저 대화 보관 · 영구 원본은 「마당에 남기기」</div>
             </div>
