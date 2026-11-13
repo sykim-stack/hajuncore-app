@@ -322,6 +322,24 @@ export default function ChatPage() {
   const send = async () => {
     const msg = input.trim();
     if (!msg || loading) return;
+    /*
+     * 「메스:」 로 시작하면 Groq 이 아니라 이 PC의 메스에게 실행시킨다.
+     * Groq 은 파일 시스템에 접근할 수 없다 — 이 PC의 일은 메스만 할 수 있다.
+     */
+    const hermesMatch = msg.match(/^메스\s*[:：]\s*([\s\S]*)$/);
+    if (hermesMatch) {
+      const task = hermesMatch[1].trim();
+      setInput('');
+      if (!task) {
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: '「메스:」 뒤에 시킬 일을 적어주세요.\n예) 메스: G:/brainpool-os/doc/status 폴더에 뭐가 있는지 알려줘',
+        }]);
+        return;
+      }
+      await runOnHermes(task);
+      return;
+    }
     const userMsg: Message = { role: 'user', content: msg };
     const nextMessages = [...messages, userMsg];
     setMessages(nextMessages);
@@ -368,8 +386,8 @@ export default function ChatPage() {
    * 답을 만드는 주체가 Groq 이 아니라 이 PC의 메스(Hermes Agent)라는 점이 send() 와 다르다.
    * session_id 를 브라우저에 남겨 다음 실행이 같은 대화를 이어간다.
    */
-  const runOnHermes = async () => {
-    const msg = input.trim();
+  const runOnHermes = async (override?: string) => {
+    const msg = (override ?? input).trim();
     if (!msg || runLoading) return;
     const sessionId = execSessionId || localStorage.getItem(EXEC_SESSION_KEY) || '';
     setMessages(prev => [...prev, { role: 'user', content: msg }]);
@@ -384,7 +402,10 @@ export default function ChatPage() {
       });
       const json = await res.json();
       if (json._error) {
-        setMessages(prev => [...prev, { role: 'assistant', content: `메스 실행 오류: ${json._error}` }]);
+        setMessages(prev => [...prev, {
+          role: 'assistant',
+          content: `메스 실행 오류: ${json._error}\n(메스가 설치된 PC에서 연 화면에서만 동작합니다. 배포본에는 메스가 없습니다.)`,
+        }]);
         return;
       }
       const p = json.payload || {};
@@ -1087,7 +1108,7 @@ export default function ChatPage() {
             <div style={S.inputArea}>
               <div style={S.inputRow}>
                 <textarea ref={textareaRef} style={S.textarea}
-                  placeholder="질문… (Enter 전송 · 원본 남기기는 오른쪽 패널)"
+                  placeholder="질문… (Enter 전송 · 「메스:」로 시작하면 이 PC의 메스가 실행)"
                   value={input} onChange={handleInput} onKeyDown={onKeyDown}
                   rows={1} disabled={loading} />
                 <button style={{ ...S.sendBtn, ...(loading || !input.trim() ? S.sendBtnOff : {}) }}
@@ -1103,7 +1124,7 @@ export default function ChatPage() {
                       ...S.hermesBtn,
                       ...(runLoading || loading || !input.trim() ? S.sendBtnOff : {}),
                     }}
-                    onClick={runOnHermes}
+                    onClick={() => runOnHermes()}
                     disabled={runLoading || loading || !input.trim()}
                   >
                     {runLoading ? '메스 실행 중…' : '메스에게 실행 (이 PC)'}
