@@ -23,6 +23,15 @@ const DEFAULT_TIMEOUT_MS = 600_000;
 const EVENT_LOG_MAX = 400;
 const OPEN_TIMEOUT_MS = 15_000;
 
+// 하준아이 작업 전용 세션 모델. 사용자 데스크톱 세션(model.default)은 건드리지 않는다.
+// 측정값: nvidia(메인)는 호출 1회 145~285초(출력 13~74토큰) → 도구 한 번 쓰는 턴이 5분.
+//         kilocode 는 2~3초 → 턴 전체 7~12초.
+// groq 은 무료지만 TPM 8,000 이라 시스템 프롬프트(≈16k)를 아예 못 보낸다
+// ("conversation has grown too large to send to openai/gpt-oss-120b").
+// reasoning 필드는 이 백엔드가 거부한다(4000 invalid params) — 보내지 않는다.
+const SESSION_MODEL = process.env.HERMES_SESSION_MODEL || 'kilo-auto/free';
+const SESSION_PROVIDER = process.env.HERMES_SESSION_PROVIDER || 'kilocode';
+
 type Json = Record<string, unknown>;
 
 export interface HermesHealth {
@@ -131,14 +140,21 @@ export async function hermesRun(input: HermesRunInput): Promise<HermesRunResult>
   let socket: WebSocket | undefined;
   let serial = 0;
   const rpcWaiters = new Map<string, (m: Json) => void>();
-  const eventWaiters: { type: string; sessionId?: string; resolve: (p: Json) => void; done: boolean }[] =
-    [];
+  type EventWaiter = {
+    type: string;
+    sessionId?: string;
+    resolve: (p: Json) => void;
+    done: boolean;
+    timer?: ReturnType<typeof setTimeout>;
+  };
+  const eventWaiters: EventWaiter[] = [];
 
   const waitEvent = (type: string, sessionId: string | undefined, ms: number) =>
     new Promise<Json>((resolve, reject) => {
-      const w = { type, sessionId, resolve, done: false };
+      const w: EventWaiter = { type, sessionId, resolve, done: false };
       eventWaiters.push(w);
-      setTimeout(() => {
+      // 타이머는 반드시 회수한다 — 회수하지 않으면 다 끝난 뒤에도 프로세스가 살아 있다.
+      w.timer = setTimeout(() => {
         if (!w.done) {
           w.done = true;
           reject(new Error(`이벤트 대기 시간 초과: ${type}`));
@@ -182,6 +198,7 @@ export async function hermesRun(input: HermesRunInput): Promise<HermesRunResult>
             (!w.sessionId || w.sessionId === params.session_id)
           ) {
             w.done = true;
+            if (w.timer) clearTimeout(w.timer);
             w.resolve(params);
           }
         }
@@ -213,7 +230,13 @@ export async function hermesRun(input: HermesRunInput): Promise<HermesRunResult>
     if (!sessionId) {
       const created = await rpc(
         'session.create',
-        { source: input.source || 'gui', profile: '', cwd: input.cwd || process.cwd() },
+        {
+          source: input.source || 'gui',
+          profile: '',
+          cwd: input.cwd || process.cwd(),
+          model: SESSION_MODEL,
+          provider: SESSION_PROVIDER,
+        },
         OPEN_TIMEOUT_MS
       );
       sessionId = typeof created.session_id === 'string' ? created.session_id : '';
@@ -248,6 +271,9 @@ export async function hermesRun(input: HermesRunInput): Promise<HermesRunResult>
       _error: errMsg(e),
     };
   } finally {
+    for (const w of eventWaiters) {
+      if (!w.done && w.timer) clearTimeout(w.timer);
+    }
     try {
       socket?.close();
     } catch {
