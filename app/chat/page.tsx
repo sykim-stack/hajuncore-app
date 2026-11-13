@@ -200,9 +200,24 @@ export default function ChatPage() {
   // 메스(실행) — 제안과 분리된 상태. 사람이 버튼을 눌러야만 채워진다.
   const [runLoading, setRunLoading]       = useState(false);
   const [execSessionId, setExecSessionId] = useState('');
+  /** 이 PC에서 메스가 실제로 닿는가. 닿지 않으면 실행 버튼을 렌더하지 않는다. */
+  const [hermesReachable, setHermesReachable] = useState(false);
 
   const bottomRef    = useRef<HTMLDivElement>(null);
   const textareaRef  = useRef<HTMLTextAreaElement>(null);
+
+  /**
+   * 메스가 닿는지 먼저 확인한다. 배포본(Vercel)에는 127.0.0.1:9119 가 없으므로
+   * 거기서는 눌러도 실패하는 버튼을 아예 보여주지 않는다. 로컬 dev 에서만 나타난다.
+   */
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/hermes')
+      .then((r) => r.json())
+      .then((j) => { if (alive) setHermesReachable(j?.payload?.reachable === true); })
+      .catch(() => { if (alive) setHermesReachable(false); });
+    return () => { alive = false; };
+  }, []);
   const selectedRoomId = rooms.find((room) => room.key === roomKey)?.id || '';
   const selectableRoomMessages = roomMessages.slice(-80).reverse();
   const selectedRoomMessages = selectedRefIds
@@ -1080,24 +1095,26 @@ export default function ChatPage() {
                   전송
                 </button>
               </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  style={{
-                    ...S.hermesBtn,
-                    ...(runLoading || loading || !input.trim() ? S.sendBtnOff : {}),
-                  }}
-                  onClick={runOnHermes}
-                  disabled={runLoading || loading || !input.trim()}
-                >
-                  {runLoading ? '메스 실행 중…' : '메스에게 실행 (이 PC)'}
-                </button>
-                <span style={{ ...S.hint, marginTop: 0 }}>
-                  {execSessionId
-                    ? `세션 ${execSessionId} 이어감 · 자동 실행 없음`
-                    : '사람이 누를 때만 실행 · 자동 실행 없음'}
-                </span>
-              </div>
+              {hermesReachable && (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    style={{
+                      ...S.hermesBtn,
+                      ...(runLoading || loading || !input.trim() ? S.sendBtnOff : {}),
+                    }}
+                    onClick={runOnHermes}
+                    disabled={runLoading || loading || !input.trim()}
+                  >
+                    {runLoading ? '메스 실행 중…' : '메스에게 실행 (이 PC)'}
+                  </button>
+                  <span style={{ ...S.hint, marginTop: 0 }}>
+                    {execSessionId
+                      ? `세션 ${execSessionId} 이어감 · 자동 실행 없음`
+                      : '사람이 누를 때만 실행 · 자동 실행 없음'}
+                  </span>
+                </div>
+              )}
               <div style={S.hint}>브라우저 대화 보관 · 영구 원본은 「마당에 남기기」</div>
             </div>
           </div>
