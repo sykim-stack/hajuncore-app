@@ -214,17 +214,14 @@ export async function fetchOpportunities(ownerKey: string): Promise<{ text: stri
   }
 }
 
-export async function consumeOpportunities(ids: string[], outcome = 'shown'): Promise<void> {
+/**
+ * DEPRECATED (A-4/33, 2026-11-16): 소비 처리(PATCH)는 서버가 `405 consume_not_supported` 로 거부한다.
+ * 소비는 조회이며, 소비자별 상태(읽었다/처리했다)는 소비자 자기 공간에 둔다.
+ * 호출부는 그대로 두되 네트워크 요청은 하지 않는다 (삭제는 한 단계 늦춤).
+ */
+export async function consumeOpportunities(ids: string[], _outcome = 'shown'): Promise<void> {
   if (!ids.length) return;
-  try {
-    await Promise.all(ids.map(id =>
-      fetch(`${COREHUB_URL}/api/corehub/opportunities?id=${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ outcome }),
-      })
-    ));
-  } catch { /* ignore */ }
+  return;
 }
 
 export async function fetchContextSummary(): Promise<string> {
