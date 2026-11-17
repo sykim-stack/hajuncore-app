@@ -49,7 +49,11 @@ type RoomMessage = {
 };
 
 const STORAGE_KEY = 'hajunai_chat_messages';
-/** 메스(Hermes Agent) 실행 세션 — 이어서 시키기 위해 브라우저에만 보관한다. DB 저장 아님. */
+/**
+ * 메스(Hermes Agent) 실행 세션 — 이어서 시키기 위해 브라우저에만 보관한다. DB 저장 아님.
+ * 값은 STORED id(stored_session_id) 다: 런타임 id 는 소켓이 닫히면 회수되어 다음 실행이
+ * 4001 session not found 로 죽는다. 이어가기는 lib/hermesClient.ts 가 session.resume 으로 처리한다.
+ */
 const EXEC_SESSION_KEY = 'hajunai_hermes_session';
 const YARD_ALLOW = new Set(['gwanje', 'gaebal', 'brainpool']);
 
@@ -409,15 +413,17 @@ export default function ChatPage() {
         return;
       }
       const p = json.payload || {};
-      if (p.session_id) {
-        setExecSessionId(String(p.session_id));
-        localStorage.setItem(EXEC_SESSION_KEY, String(p.session_id));
+      // 남기는 것은 STORED id 다 — 런타임 id 는 소켓과 함께 사라진다.
+      const keepId = String(p.stored_session_id || p.session_id || '');
+      if (keepId) {
+        setExecSessionId(keepId);
+        localStorage.setItem(EXEC_SESSION_KEY, keepId);
       }
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: p.text || '(응답 없음)',
         exec: {
-          session_id: String(p.session_id || ''),
+          session_id: keepId,
           status: String(p.status || ''),
           duration_ms: typeof p.duration_ms === 'number' ? p.duration_ms : undefined,
           tokens: typeof p.usage?.total === 'number' ? p.usage.total : undefined,

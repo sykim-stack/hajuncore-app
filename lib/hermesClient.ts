@@ -11,11 +11,16 @@
 //
 // 확인된 흐름 (2026-11 실측):
 //   ws://127.0.0.1:9119/api/ws?token=<세션토큰>  (연결 즉시 gateway.ready)
-//   → session.create {source, profile, cwd} → {session_id, stored_session_id, ...}
+//   → session.create {source, profile, cwd} → {session_id(이번 소켓의 런타임 id), stored_session_id(DB 행 id)}
 //   → prompt.submit {session_id, text}
 //   → event:message.start → message.delta / thinking.delta → message.complete
 //     (message.complete.payload = { text, usage, status })
-//   같은 session_id 로 다시 prompt.submit 하면 대화가 이어진다.
+//
+// 대화 이어가기 — 두 id 를 구분해야 한다 (2026-11-15 실측):
+//   런타임 id(session_id) 는 이 소켓이 닫히면 detach 되고 ws-orphan reaper 가 유예(기본 20초) 뒤에
+//   회수한다. 그 값을 저장해 다음 실행에 prompt.submit 에 실으면 4001 session not found 로 죽는다.
+//   이어가려면 STORED id 를 넘긴다 — 재개 순서:
+//     → session.resume {session_id: STORED id} → {session_id: 새 런타임 id} → prompt.submit
 
 export const HERMES_BASE_URL = process.env.HERMES_BASE_URL || 'http://127.0.0.1:9119';
 
@@ -45,7 +50,7 @@ export interface HermesHealth {
 export interface HermesRunInput {
   /** 하준아이가 넘기는 작업 지시 원문. */
   prompt: string;
-  /** 있으면 그 세션에 이어서 보낸다 (작업 연속성). */
+  /** 있으면 그 대화를 이어간다 — 값은 반드시 STORED id (session.create 가 준 stored_session_id). */
   session_id?: string;
   /** 작업 폴더. Hermes 가 이 경로의 AGENTS.md·메모리·스킬을 함께 읽는다. */
   cwd?: string;
@@ -56,7 +61,9 @@ export interface HermesRunInput {
 }
 
 export interface HermesRunResult {
+  /** 이번 실행의 런타임 id. 소켓과 함께 사라지므로 저장하지 않는다. */
   session_id?: string;
+  /** 다음 실행에 넘길 STORED id. 이 값을 브라우저에 남긴다. */
   stored_session_id?: string;
   /** 최종 답변 텍스트. */
   text?: string;
@@ -224,9 +231,27 @@ export async function hermesRun(input: HermesRunInput): Promise<HermesRunResult>
       setTimeout(() => reject(new Error('WebSocket 연결 시간 초과')), OPEN_TIMEOUT_MS);
     });
 
-    // 1) 세션 확보 — session_id 가 오면 새로 만들지 않는다.
-    let sessionId = (input.session_id || '').trim();
+    // 1) 세션 확보.
+    //    input.session_id 는 STORED id 다 (런타임 id 가 아니다).
+    //    session.resume 은 STORED id 를 받고, 답으로 이번 소켓의 런타임 id 를 준다.
+    let sessionId = '';
     let storedSessionId: string | undefined;
+    const wanted = (input.session_id || '').trim();
+    if (wanted) {
+      const resumed = await rpc(
+        'session.resume',
+        { session_id: wanted, profile: '', source: input.source || 'gui' },
+        OPEN_TIMEOUT_MS
+      ).catch(() => null);
+      if (resumed && typeof resumed.session_id === 'string' && resumed.session_id) {
+        sessionId = resumed.session_id;
+        storedSessionId =
+          typeof resumed.stored_session_id === 'string' && resumed.stored_session_id
+            ? resumed.stored_session_id
+            : wanted;
+      }
+      // resumed 가 없으면(저장된 행이 없거나 런타임 id 가 새어 들어온 경우) 아래에서 새로 만든다.
+    }
     if (!sessionId) {
       const created = await rpc(
         'session.create',
