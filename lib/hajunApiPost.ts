@@ -23,6 +23,7 @@ import {
   getProductMessages,
 } from '@/lib/hajunApiCore';
 import { evaluateHermesRule, formatHermesHint } from '@/lib/hermesRule';
+import { hermesRun } from '@/lib/hermesClient';
 
 async function callGroqWithFallback(
   prompt: string,
@@ -257,21 +258,67 @@ export async function POST(req: Request) {
           })
           .join('\n'),
         '=== 답변 (완전한 문장으로 끝낼 것) ===',
+        '작업이 필요하면 답변 끝에 다음 JSON을 한 줄로 덧붙여라 (read만 자동 실행, write는 승인 대기): {"need_work":{"kind":"read","ask":"<조사 지시 원문>"}}',
       ].join('\n');
       const aiResult = await callGroqWithFallback(prompt, { temperature: 0.35, max_tokens: 2500 });
       if (aiResult._error || !aiResult.text) {
         return Response.json({ _error: `AI 호출 실패: ${aiResult._error || '빈 응답'}`, traceId }, { status: 200 });
+      }
+      // need_work 신호 파싱 (잠근 결정 3: read만 자동, write는 승인 대기)
+      let needWork: { kind?: string; ask?: string } | null = null;
+      let replyText = aiResult.text.trim();
+      const nwMatch = replyText.match(/\{"need_work"\s*:\s*\{[^}]*\}\}/);
+      if (nwMatch) {
+        try {
+          const parsed = JSON.parse(nwMatch[0]);
+          if (parsed && parsed.need_work && typeof parsed.need_work.ask === 'string') {
+            needWork = parsed.need_work;
+          }
+        } catch { /* ignore */ }
+        replyText = replyText.replace(nwMatch[0], '').trim();
       }
       const saved = await insertHajunMessage({
         room_id,
         author_type: 'ai',
         author_name: 'HajunAI',
         msg_type: 'answer',
-        content: aiResult.text.trim(),
+        content: replyText,
         ref_ids: Array.isArray(ref_ids) ? ref_ids : [],
       });
       if (saved._error) return Response.json({ _error: saved._error, traceId }, { status: 200 });
-      return Response.json({ payload: saved.data?.[0] || null, traceId }, { status: 200 });
+
+      // 자동 경로 (read만) — 비동기, 결과는 메시지로 남김 (잠근 결정 4-2)
+      if (needWork && needWork.kind === 'read' && needWork.ask) {
+        const ask = needWork.ask;
+        void (async () => {
+          try {
+            const result = await hermesRun({ prompt: ask, timeout_ms: 240000, source: 'hajunai-auto' });
+            const content = result._error
+              ? `[조사 실패] ${result._error}`
+              : (result.text || '(응답 없음)');
+            await insertHajunMessage({
+              room_id,
+              author_type: 'ai',
+              author_name: '메스',
+              msg_type: 'work_result',
+              content,
+              ref_ids: [],
+              metadata: { entity_type: 'mes_session', stored_session_id: result.stored_session_id, trace_id: traceId },
+            });
+          } catch (e) {
+            await insertHajunMessage({
+              room_id,
+              author_type: 'ai',
+              author_name: '메스',
+              msg_type: 'work_result',
+              content: `[조사 실패] ${e instanceof Error ? e.message : String(e)}`,
+              ref_ids: [],
+            }).catch(() => {});
+          }
+        })();
+      }
+
+      return Response.json({ payload: saved.data?.[0] || null, traceId, need_work: needWork }, { status: 200 });
     }
 
     if (action === 'update_context') {
