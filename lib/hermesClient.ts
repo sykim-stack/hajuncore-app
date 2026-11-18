@@ -240,7 +240,7 @@ export async function hermesRun(input: HermesRunInput): Promise<HermesRunResult>
     if (wanted) {
       const resumed = await rpc(
         'session.resume',
-        { session_id: wanted, profile: '', source: input.source || 'gui' },
+        { session_id: wanted, profile: 'hajunai', source: input.source || 'gui' },
         OPEN_TIMEOUT_MS
       ).catch(() => null);
       if (resumed && typeof resumed.session_id === 'string' && resumed.session_id) {
@@ -257,7 +257,7 @@ export async function hermesRun(input: HermesRunInput): Promise<HermesRunResult>
         'session.create',
         {
           source: input.source || 'gui',
-          profile: '',
+          profile: 'hajunai',
           cwd: input.cwd || process.cwd(),
           model: SESSION_MODEL,
           provider: SESSION_PROVIDER,
