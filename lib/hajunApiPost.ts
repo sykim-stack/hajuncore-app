@@ -247,6 +247,7 @@ export async function POST(req: Request) {
         '아래 방 기록과 참조 메시지만 근거로 한국어로 답하세요.',
         '문장이 중간에 끊기지 않게 끝까지 완성하세요. 필요하면 여러 문단으로 충분히 설명해도 됩니다.',
         '확인되지 않은 추측은 하지 마세요. 과도한 마크다운 목록은 피하세요.',
+        '최근 [메스/work_result] 메시지가 있다면 그 내용을 인용·요약하여 답하세요 — 과거 답변을 반복하지 말고 메스의 조사 결과를 반영하세요.',
         refSet.size
           ? `우선 참조할 메시지 ID: ${[...refSet].join(', ')} — 이 글을 중심으로 답하세요.`
           : '특정 참조 없음 — 최근 방 기록 전체를 보고 답하세요.',
@@ -356,7 +357,8 @@ export async function POST(req: Request) {
         `개발 맥락:\n${contextSummary}\n\n` +
         `MindWorld:\n${mindWorldSummary}\n\n` +
         `이해:\n${understandingText || '없음'}` +
-        hermesHint;
+        hermesHint +
+        `\n\n작업이 필요하면 답변 끝에 다음 JSON을 한 줄로 덧붙여라 (read만 자동 실행, write는 승인 대기): {"need_work":{"kind":"read","ask":"<조사 지시 원문>"}}`;
       const groqResult = await callGroq(systemPrompt, message.trim(), history);
       if (groqResult._error) return Response.json({ _error: groqResult._error, traceId }, { status: 200 });
       const { reply, observations } = parseReply(groqResult.text || '');
@@ -367,6 +369,50 @@ export async function POST(req: Request) {
         summary: reply.slice(0, 100),
         keywords: ['chat', 'hajunai'],
       });
+
+      // 자동 경로 (read만) — 비동기, 결과는 메시지로 남김 (잠근 결정 4-2)
+      let needWork: { kind?: string; ask?: string } | null = null;
+      const nwMatch = reply.match(/{"need_work"\s*:\s*\{[^}]*\}}/);
+      if (nwMatch) {
+        try {
+          const parsed = JSON.parse(nwMatch[0]);
+          if (parsed && parsed.need_work && typeof parsed.need_work.ask === 'string') {
+            needWork = parsed.need_work;
+          }
+        } catch { /* ignore */ }
+      }
+      if (needWork && needWork.kind === 'read' && needWork.ask) {
+        const ask = needWork.ask;
+        // chat 액션의 자동 경로 결과는 corechat 방에 저장 (개발마당 > 코어챗)
+        const CHAT_AUTO_ROOM_ID = 'e7aaa62c-f993-42c8-b884-56522f7f3baa';
+        void (async () => {
+          try {
+            const result = await hermesRun({ prompt: ask, timeout_ms: 240000, source: 'hajunai-auto' });
+            const content = result._error
+              ? `[조사 실패] ${result._error}`
+              : (result.text || '(응답 없음)');
+            await insertHajunMessage({
+              room_id: CHAT_AUTO_ROOM_ID,
+              author_type: 'ai',
+              author_name: '메스',
+              msg_type: 'work_result',
+              content,
+              ref_ids: [],
+              metadata: { entity_type: 'mes_session', stored_session_id: result.stored_session_id, trace_id: traceId },
+            });
+          } catch (e) {
+            await insertHajunMessage({
+              room_id: CHAT_AUTO_ROOM_ID,
+              author_type: 'ai',
+              author_name: '메스',
+              msg_type: 'work_result',
+              content: `[조사 실패] ${e instanceof Error ? e.message : String(e)}`,
+              ref_ids: [],
+            }).catch(() => {});
+          }
+        })();
+      }
+
       return Response.json({
         reply,
         observations,
