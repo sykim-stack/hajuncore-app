@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
+import CoreNullHandoffButton from '@/components/CoreNullHandoffButton';
 
 // [CoreNull UI 정리 2026-09-06]
 // 운영 화면은 상태(대시보드)·대화(하준챗)·축적된 결과(기억)의 3축으로 유지한다.
@@ -17,6 +18,7 @@ const NAV = [
 export default function Sidebar() {
   const path = usePathname();
   const [open, setOpen] = useState(false);
+  const showCoreNull = Boolean(process.env.NEXT_PUBLIC_CORENULL_URL);
 
   return (
     <>
@@ -99,6 +101,15 @@ export default function Sidebar() {
               </Link>
             );
           })}
+
+          {showCoreNull && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+              <div style={{ padding: '4px 12px 8px', fontSize: 12, color: 'var(--text2)' }}>
+                Core 연결
+              </div>
+              <CoreNullHandoffButton />
+            </div>
+          )}
         </nav>
 
         <div style={{ padding: '16px 20px', fontSize: 13, color: 'var(--text2)', fontFamily: 'Noto Sans KR, sans-serif' }}>
