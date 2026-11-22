@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { getSupabaseBrowser } from '@/lib/supabaseBrowser';
 
 export default function CoreNullHandoffButton() {
   const [busy, setBusy] = useState(false);
@@ -15,10 +16,26 @@ export default function CoreNullHandoffButton() {
 
     setBusy(true);
     try {
+      const supabase = getSupabaseBrowser();
+      if (!supabase) {
+        throw new Error('인증 설정이 없습니다. (NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)');
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error('공유 인증 세션이 없습니다. 먼저 로그인해 주세요.');
+      }
+
       const response = await fetch('/api/auth/handoffs', {
         method: 'POST',
         cache: 'no-store',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
         credentials: 'include',
         body: JSON.stringify({ audience: 'corenull' }),
       });
@@ -32,7 +49,7 @@ export default function CoreNullHandoffButton() {
       ) {
         throw new Error(
           result?._error === 'auth_required'
-            ? '공유 인증 세션이 없습니다. 먼저 인증된 Core에서 시작해 주세요.'
+            ? '공유 인증 세션이 없습니다. 먼저 로그인해 주세요.'
             : 'CoreHub 인증 전달에 실패했어요. 잠시 후 다시 시도해 주세요.',
         );
       }
