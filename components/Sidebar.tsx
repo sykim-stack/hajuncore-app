@@ -3,7 +3,9 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import CoreNullHandoffButton from '@/components/CoreNullHandoffButton';
+import CoreRingHandoffButton from '@/components/CoreRingHandoffButton';
 import { getSupabaseBrowser } from '@/lib/supabaseBrowser';
+import type { Session } from '@supabase/supabase-js';
 
 // [CoreNull UI 정리 2026-09-06]
 // 운영 화면은 상태(대시보드)·대화(하준챗)·축적된 결과(기억)의 3축으로 유지한다.
@@ -16,10 +18,13 @@ const NAV = [
   { href: '/hajun',     icon: '🏡', label: '하준아이 마당' },
 ];
 
+const REOPEN_SIDEBAR_AFTER_LOGIN_KEY = 'hajun_reopen_sidebar_after_login';
+
 export default function Sidebar() {
   const path = usePathname();
   const [open, setOpen] = useState(false);
   const showCoreNull = Boolean(process.env.NEXT_PUBLIC_CORENULL_URL);
+  const showCoreRing = Boolean(process.env.NEXT_PUBLIC_CORERING_URL);
   const [email, setEmail] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
 
@@ -27,14 +32,25 @@ export default function Sidebar() {
     const supabase = getSupabaseBrowser();
     if (!supabase) return;
 
+    const applySession = (session: Session | null) => {
+      setEmail(session?.user?.email ?? null);
+      if (
+        session &&
+        window.sessionStorage.getItem(REOPEN_SIDEBAR_AFTER_LOGIN_KEY) === '1'
+      ) {
+        window.sessionStorage.removeItem(REOPEN_SIDEBAR_AFTER_LOGIN_KEY);
+        setOpen(true);
+      }
+    };
+
     supabase.auth.getSession().then(({ data }) => {
-      setEmail(data.session?.user?.email ?? null);
+      applySession(data.session);
     });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      setEmail(session?.user?.email ?? null);
+      applySession(session);
     });
 
     return () => subscription.unsubscribe();
@@ -46,6 +62,11 @@ export default function Sidebar() {
       window.alert('인증 설정이 없습니다. (NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)');
       return;
     }
+    if (window.matchMedia('(max-width: 768px)').matches) {
+      window.sessionStorage.setItem(REOPEN_SIDEBAR_AFTER_LOGIN_KEY, '1');
+    } else {
+      window.sessionStorage.removeItem(REOPEN_SIDEBAR_AFTER_LOGIN_KEY);
+    }
     setAuthBusy(true);
     try {
       const { error } = await supabase.auth.signInWithOAuth({
@@ -56,6 +77,7 @@ export default function Sidebar() {
       });
       if (error) throw error;
     } catch (e: unknown) {
+      window.sessionStorage.removeItem(REOPEN_SIDEBAR_AFTER_LOGIN_KEY);
       window.alert(e instanceof Error ? e.message : '로그인에 실패했어요.');
       setAuthBusy(false);
     }
@@ -155,12 +177,13 @@ export default function Sidebar() {
             );
           })}
 
-          {showCoreNull && (
+          {(showCoreNull || showCoreRing) && (
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
               <div style={{ padding: '4px 12px 8px', fontSize: 12, color: 'var(--text2)' }}>
                 Core 연결
               </div>
-              <CoreNullHandoffButton />
+              {showCoreNull && <CoreNullHandoffButton />}
+              {showCoreRing && <CoreRingHandoffButton />}
             </div>
           )}
         </nav>
