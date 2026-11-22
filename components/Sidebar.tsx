@@ -1,9 +1,11 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import CoreNullHandoffButton from '@/components/CoreNullHandoffButton';
 import CoreRingHandoffButton from '@/components/CoreRingHandoffButton';
+import { getSupabaseBrowser } from '@/lib/supabaseBrowser';
+import type { Session } from '@supabase/supabase-js';
 
 // [CoreNull UI 정리 2026-09-06]
 // 운영 화면은 상태(대시보드)·대화(하준챗)·축적된 결과(기억)의 3축으로 유지한다.
@@ -16,12 +18,82 @@ const NAV = [
   { href: '/hajun',     icon: '🏡', label: '하준아이 마당' },
 ];
 
+const REOPEN_SIDEBAR_AFTER_LOGIN_KEY = 'hajun_reopen_sidebar_after_login';
+
 export default function Sidebar() {
   const path = usePathname();
   const [open, setOpen] = useState(false);
-  const showCoreLinks =
-    Boolean(process.env.NEXT_PUBLIC_CORENULL_URL) ||
-    Boolean(process.env.NEXT_PUBLIC_CORERING_URL);
+  const showCoreNull = Boolean(process.env.NEXT_PUBLIC_CORENULL_URL);
+  const showCoreRing = Boolean(process.env.NEXT_PUBLIC_CORERING_URL);
+  const [email, setEmail] = useState<string | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
+
+  useEffect(() => {
+    const supabase = getSupabaseBrowser();
+    if (!supabase) return;
+
+    const applySession = (session: Session | null) => {
+      setEmail(session?.user?.email ?? null);
+      if (
+        session &&
+        window.sessionStorage.getItem(REOPEN_SIDEBAR_AFTER_LOGIN_KEY) === '1'
+      ) {
+        window.sessionStorage.removeItem(REOPEN_SIDEBAR_AFTER_LOGIN_KEY);
+        setOpen(true);
+      }
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
+      applySession(data.session);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      applySession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const signInGoogle = async () => {
+    const supabase = getSupabaseBrowser();
+    if (!supabase) {
+      window.alert('인증 설정이 없습니다. (NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)');
+      return;
+    }
+    if (window.matchMedia('(max-width: 768px)').matches) {
+      window.sessionStorage.setItem(REOPEN_SIDEBAR_AFTER_LOGIN_KEY, '1');
+    } else {
+      window.sessionStorage.removeItem(REOPEN_SIDEBAR_AFTER_LOGIN_KEY);
+    }
+    setAuthBusy(true);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: typeof window !== 'undefined' ? window.location.origin + path : undefined,
+        },
+      });
+      if (error) throw error;
+    } catch (e: unknown) {
+      window.sessionStorage.removeItem(REOPEN_SIDEBAR_AFTER_LOGIN_KEY);
+      window.alert(e instanceof Error ? e.message : '로그인에 실패했어요.');
+      setAuthBusy(false);
+    }
+  };
+
+  const signOut = async () => {
+    const supabase = getSupabaseBrowser();
+    if (!supabase) return;
+    setAuthBusy(true);
+    try {
+      await supabase.auth.signOut();
+      setEmail(null);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
 
   return (
     <>
@@ -105,19 +177,70 @@ export default function Sidebar() {
             );
           })}
 
-          {showCoreLinks && (
+          {(showCoreNull || showCoreRing) && (
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
               <div style={{ padding: '4px 12px 8px', fontSize: 12, color: 'var(--text2)' }}>
                 Core 연결
               </div>
-              {process.env.NEXT_PUBLIC_CORENULL_URL ? <CoreNullHandoffButton /> : null}
-              {process.env.NEXT_PUBLIC_CORERING_URL ? <CoreRingHandoffButton /> : null}
+              {showCoreNull && <CoreNullHandoffButton />}
+              {showCoreRing && <CoreRingHandoffButton />}
             </div>
           )}
         </nav>
 
-        <div style={{ padding: '16px 20px', fontSize: 13, color: 'var(--text2)', fontFamily: 'Noto Sans KR, sans-serif' }}>
-          v1.1 · 기억보다 행동
+        {/* Path S: 최소 로그인 */}
+        <div style={{
+          padding: '12px 16px',
+          borderTop: '1px solid var(--border)',
+          fontSize: 13,
+          color: 'var(--text2)',
+          fontFamily: 'Noto Sans KR, sans-serif',
+        }}>
+          {email ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={email}>
+                {email}
+              </div>
+              <button
+                type="button"
+                onClick={signOut}
+                disabled={authBusy}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: 6,
+                  border: '1px solid var(--border)',
+                  background: 'transparent',
+                  color: 'var(--text2)',
+                  cursor: authBusy ? 'wait' : 'pointer',
+                  fontSize: 13,
+                }}
+              >
+                로그아웃
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={signInGoogle}
+              disabled={authBusy}
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                borderRadius: 6,
+                border: '1px solid var(--border)',
+                background: 'rgba(88,166,255,0.1)',
+                color: 'var(--accent)',
+                cursor: authBusy ? 'wait' : 'pointer',
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              {authBusy ? '이동 중…' : 'Google 로그인'}
+            </button>
+          )}
+          <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>
+            v1.1 · 기억보다 행동
+          </div>
         </div>
       </aside>
 
@@ -129,7 +252,7 @@ export default function Sidebar() {
             position: fixed !important;
             left: -220px !important;
             top: 0 !important;
-            z-index: 95 !important;
+            zIndex: 95 !important;
             transition: left 0.25s ease !important;
             min-height: 100dvh !important;
           }
