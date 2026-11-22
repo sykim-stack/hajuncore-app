@@ -1,8 +1,9 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import CoreNullHandoffButton from '@/components/CoreNullHandoffButton';
+import { getSupabaseBrowser } from '@/lib/supabaseBrowser';
 
 // [CoreNull UI 정리 2026-09-06]
 // 운영 화면은 상태(대시보드)·대화(하준챗)·축적된 결과(기억)의 3축으로 유지한다.
@@ -19,6 +20,58 @@ export default function Sidebar() {
   const path = usePathname();
   const [open, setOpen] = useState(false);
   const showCoreNull = Boolean(process.env.NEXT_PUBLIC_CORENULL_URL);
+  const [email, setEmail] = useState<string | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
+
+  useEffect(() => {
+    const supabase = getSupabaseBrowser();
+    if (!supabase) return;
+
+    supabase.auth.getSession().then(({ data }) => {
+      setEmail(data.session?.user?.email ?? null);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setEmail(session?.user?.email ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const signInGoogle = async () => {
+    const supabase = getSupabaseBrowser();
+    if (!supabase) {
+      window.alert('인증 설정이 없습니다. (NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)');
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: typeof window !== 'undefined' ? window.location.origin + path : undefined,
+        },
+      });
+      if (error) throw error;
+    } catch (e: unknown) {
+      window.alert(e instanceof Error ? e.message : '로그인에 실패했어요.');
+      setAuthBusy(false);
+    }
+  };
+
+  const signOut = async () => {
+    const supabase = getSupabaseBrowser();
+    if (!supabase) return;
+    setAuthBusy(true);
+    try {
+      await supabase.auth.signOut();
+      setEmail(null);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
 
   return (
     <>
@@ -112,8 +165,59 @@ export default function Sidebar() {
           )}
         </nav>
 
-        <div style={{ padding: '16px 20px', fontSize: 13, color: 'var(--text2)', fontFamily: 'Noto Sans KR, sans-serif' }}>
-          v1.1 · 기억보다 행동
+        {/* Path S: 최소 로그인 */}
+        <div style={{
+          padding: '12px 16px',
+          borderTop: '1px solid var(--border)',
+          fontSize: 13,
+          color: 'var(--text2)',
+          fontFamily: 'Noto Sans KR, sans-serif',
+        }}>
+          {email ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={email}>
+                {email}
+              </div>
+              <button
+                type="button"
+                onClick={signOut}
+                disabled={authBusy}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: 6,
+                  border: '1px solid var(--border)',
+                  background: 'transparent',
+                  color: 'var(--text2)',
+                  cursor: authBusy ? 'wait' : 'pointer',
+                  fontSize: 13,
+                }}
+              >
+                로그아웃
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={signInGoogle}
+              disabled={authBusy}
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                borderRadius: 6,
+                border: '1px solid var(--border)',
+                background: 'rgba(88,166,255,0.1)',
+                color: 'var(--accent)',
+                cursor: authBusy ? 'wait' : 'pointer',
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              {authBusy ? '이동 중…' : 'Google 로그인'}
+            </button>
+          )}
+          <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>
+            v1.1 · 기억보다 행동
+          </div>
         </div>
       </aside>
 
@@ -125,7 +229,7 @@ export default function Sidebar() {
             position: fixed !important;
             left: -220px !important;
             top: 0 !important;
-            z-index: 95 !important;
+            zIndex: 95 !important;
             transition: left 0.25s ease !important;
             min-height: 100dvh !important;
           }
