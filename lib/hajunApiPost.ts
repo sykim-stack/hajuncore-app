@@ -22,7 +22,11 @@ import {
   supabasePatch,
   getProductMessages,
 } from '@/lib/hajunApiCore';
-import { evaluateHermesRule, formatHermesHint } from '@/lib/hermesRule';
+import {
+  evaluateHermesRule,
+  formatHermesHint,
+  HERMES_PHASE0_SYSTEM_PROMPT,
+} from '@/lib/hermesRule';
 
 async function callGroqWithFallback(
   prompt: string,
@@ -282,8 +286,8 @@ export async function POST(req: Request) {
     }
 
     if (action === 'chat') {
-      const { message, history = [], owner_key = '' } = body as {
-        message: string; history: Array<{ role: string; content: string }>; owner_key?: string;
+      const { message, history = [], owner_key = '', room_type } = body as {
+        message: string; history: Array<{ role: string; content: string }>; owner_key?: string; room_type?: string;
       };
       if (!message || typeof message !== 'string' || message.trim() === '') {
         return Response.json({ _error: '메시지가 비어있습니다', traceId }, { status: 200 });
@@ -299,11 +303,13 @@ export async function POST(req: Request) {
       const hermesJudgment = evaluateHermesRule({
         utterance: message.trim(),
         understanding: understandingText || null,
+        room_type,
       });
       const hermesHint = formatHermesHint(hermesJudgment);
 
       const systemPrompt =
-        `당신은 HajunAI입니다. 챗봇이 아닙니다.\n` +
+        HERMES_PHASE0_SYSTEM_PROMPT +
+        `\n\n당신은 HajunAI입니다. 챗봇이 아닙니다.\n` +
         `마당에 쌓인 원본을 이해하고 사람과 말합니다.\n` +
         `근거 없는 사실 금지. 한국어만. 마크다운 금지.\n\n` +
         `개발 맥락:\n${contextSummary}\n\n` +

@@ -19,6 +19,10 @@
 // 실행 인터페이스 자체(에이전트 호출)는 lib/hermesClient.ts 에 있다.
 
 import { hermesHealth, hermesRun } from '@/lib/hermesClient';
+import {
+  buildHermesPhase0TaskPrompt,
+  evaluateHermesRule,
+} from '@/lib/hermesRule';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -55,8 +59,13 @@ export async function POST(request: Request) {
     return Response.json({ _error: 'prompt 가 필요합니다', traceId }, { status: 200 });
   }
 
+  const judgment = evaluateHermesRule({
+    utterance: prompt.trim(),
+    understanding: typeof body.understanding === 'string' ? body.understanding : null,
+    room_type: body.room_type === 'product' ? 'product' : undefined,
+  });
   const result = await hermesRun({
-    prompt,
+    prompt: buildHermesPhase0TaskPrompt(prompt.trim(), judgment),
     session_id: typeof body.session_id === 'string' ? body.session_id : undefined,
     cwd: typeof body.cwd === 'string' ? body.cwd : undefined,
     source: typeof body.source === 'string' ? body.source : undefined,
