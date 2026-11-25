@@ -252,7 +252,7 @@ export default function Sidebar() {
             position: fixed !important;
             left: -220px !important;
             top: 0 !important;
-            zIndex: 95 !important;
+            z-index: 95 !important;
             transition: left 0.25s ease !important;
             min-height: 100dvh !important;
           }
