@@ -200,7 +200,7 @@ export default function HajunHome() {
         body: JSON.stringify({
           room_id: selectedRoomId,
           title: sourceTitle.trim(),
-          content: sourceContent.trim(),
+          content: sourceContent,
           content_type: 'text/markdown',
         }),
       });
