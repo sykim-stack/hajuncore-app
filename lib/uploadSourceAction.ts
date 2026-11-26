@@ -27,20 +27,33 @@ function jsonError(error: string, traceId: string, status = 400) {
   );
 }
 
-export async function handleUploadSource(
-  body: UploadSourceBody,
-  traceId: string,
-  accessToken: string,
-): Promise<Response> {
-  // Validate the existing Supabase Auth session with Auth server.
-  // Create a request-scoped client so no user's auth state is shared between requests.
-  const authClient = createClient(SUPABASE_URL, SUPABASE_KEY, {
+function createRequestAuthClient() {
+  return createClient(SUPABASE_URL, SUPABASE_KEY, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
       detectSessionInUrl: false,
     },
   });
+}
+
+export async function handleUploadSource(
+  body: UploadSourceBody,
+  traceId: string,
+  accessToken: string,
+): Promise<Response> {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    return jsonError('auth_configuration_missing', traceId, 503);
+  }
+
+  // Validate the existing Supabase Auth session with Auth server.
+  // Create a request-scoped client so no user's auth state is shared between requests.
+  let authClient: ReturnType<typeof createRequestAuthClient>;
+  try {
+    authClient = createRequestAuthClient();
+  } catch {
+    return jsonError('auth_client_initialization_failed', traceId, 503);
+  }
 
   let authUserId = '';
   try {
