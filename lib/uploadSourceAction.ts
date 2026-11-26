@@ -5,8 +5,6 @@ import {
   getRoomByKeys,
   insertHajunMessage,
   supabaseGet,
-  SUPABASE_URL,
-  SUPABASE_KEY,
 } from '@/lib/hajunApiCore';
 import { resolveSourcePrincipal } from '@/lib/sourceAuth';
 
@@ -35,42 +33,6 @@ export async function handleUploadSource(
   const principal = await resolveSourcePrincipal(accessToken);
   if (!principal.ok) {
     return jsonError(principal.error, traceId, principal.status);
-  }
-
-  const { data, error } = await authClient.auth.getUser(accessToken);
-    if (error || !data.user?.id) {
-      return jsonError('invalid_or_expired_session', traceId, 401);
-    }
-    authUserId = data.user.id;
-  } catch {
-    return jsonError('auth_verification_unavailable', traceId, 503);
-  }
-
-  // Reuse CoreHub's existing principal → owner_key mapping.
-  // Never accept owner_key from the request body.
-  let hasActiveOwnerLink = false;
-  try {
-    const { data, error } = await authClient
-      .schema('corehub')
-      .from('auth_owner_links')
-      .select('owner_key')
-      .eq('auth_user_id', authUserId)
-      .is('revoked_at', null);
-
-    if (error) {
-      return jsonError('principal_mapping_unavailable', traceId, 503);
-    }
-
-    hasActiveOwnerLink = (data || []).some(
-      (row: { owner_key?: unknown }) =>
-        typeof row.owner_key === 'string' && row.owner_key.trim().length > 0,
-    );
-  } catch {
-    return jsonError('principal_mapping_unavailable', traceId, 503);
-  }
-
-  if (!hasActiveOwnerLink) {
-    return jsonError('owner_not_linked', traceId, 403);
   }
 
   const {
@@ -104,9 +66,8 @@ export async function handleUploadSource(
   }
 
   // Current HajunCore schema has no owner column on hajun_yards/hajun_rooms.
-  // Therefore the existing linked-owner scope is the workspace-level write boundary:
-  // only a signed-in principal with an active CoreHub owner link may write to an
-  // existing HajunCore room. No per-room ownership relation is fabricated here.
+  // The active CoreHub owner-link is therefore the existing workspace-level
+  // authorization boundary; this code does not invent per-room ownership.
   const rooms = await supabaseGet(
     `hajun_rooms?id=eq.${encodeURIComponent(room_id)}&select=id,yard_id,key,name&limit=1`,
   );
