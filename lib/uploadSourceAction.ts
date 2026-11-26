@@ -57,8 +57,9 @@ export async function handleUploadSource(
     return jsonError('room_id 또는 yard_key+room_key가 필요합니다 (호출자가 방 지정)', traceId);
   }
 
-  const bodyText = typeof content === 'string' ? content.trim() : '';
-  if (!bodyText) {
+  // Validate whitespace-only input without rewriting the user's original Source.
+  const bodyText = typeof content === 'string' ? content : '';
+  if (!bodyText.trim()) {
     return jsonError('content가 비어 있습니다 (P1 text Source만)', traceId);
   }
   if (bodyText.includes('\0')) {
