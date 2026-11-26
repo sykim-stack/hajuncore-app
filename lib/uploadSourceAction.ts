@@ -48,7 +48,7 @@ export async function handleUploadSource(
   if (!bodyText) {
     return Response.json({ _error: 'content가 비어 있습니다 (P1 text Source만)', traceId }, { status: 200 });
   }
-  if (bodyText.includes('\u0000')) {
+  if (bodyText.includes('\0')) {
     return Response.json({ _error: 'binary content는 P1 범위 밖입니다', traceId }, { status: 200 });
   }
 
