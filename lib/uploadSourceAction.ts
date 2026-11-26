@@ -1,7 +1,6 @@
 // lib/uploadSourceAction.ts
 // P1 Source upload — CONTRACT 2026-11-26
 import { createHash } from 'crypto';
-import { createClient } from '@supabase/supabase-js';
 import {
   getRoomByKeys,
   insertHajunMessage,
@@ -9,6 +8,7 @@ import {
   SUPABASE_URL,
   SUPABASE_KEY,
 } from '@/lib/hajunApiCore';
+import { resolveSourcePrincipal } from '@/lib/sourceAuth';
 
 export type UploadSourceBody = {
   content?: string;
@@ -27,37 +27,17 @@ function jsonError(error: string, traceId: string, status = 400) {
   );
 }
 
-function createRequestAuthClient() {
-  return createClient(SUPABASE_URL, SUPABASE_KEY, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-  });
-}
-
 export async function handleUploadSource(
   body: UploadSourceBody,
   traceId: string,
   accessToken: string,
 ): Promise<Response> {
-  if (!SUPABASE_URL || !SUPABASE_KEY) {
-    return jsonError('auth_configuration_missing', traceId, 503);
+  const principal = await resolveSourcePrincipal(accessToken);
+  if (!principal.ok) {
+    return jsonError(principal.error, traceId, principal.status);
   }
 
-  // Validate the existing Supabase Auth session with Auth server.
-  // Create a request-scoped client so no user's auth state is shared between requests.
-  let authClient: ReturnType<typeof createRequestAuthClient>;
-  try {
-    authClient = createRequestAuthClient();
-  } catch {
-    return jsonError('auth_client_initialization_failed', traceId, 503);
-  }
-
-  let authUserId = '';
-  try {
-    const { data, error } = await authClient.auth.getUser(accessToken);
+  const { data, error } = await authClient.auth.getUser(accessToken);
     if (error || !data.user?.id) {
       return jsonError('invalid_or_expired_session', traceId, 401);
     }
