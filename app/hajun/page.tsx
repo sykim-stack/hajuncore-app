@@ -132,6 +132,7 @@ export default function HajunHome() {
   const loadSources = useCallback(async () => {
     setSourceLoading(true);
     setSourceError('');
+    setSourceItems([]);
     try {
       const supabase = getSupabaseBrowser();
       if (!supabase) throw new Error('인증 설정을 확인해 주세요.');
