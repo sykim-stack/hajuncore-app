@@ -97,18 +97,36 @@ export default function Sidebar() {
 
   return (
     <>
-      {/* 모바일 햄버거 버튼 */}
+      {/* 모바일 햄버거 버튼 — display는 CSS만 제어 (inline display:none 이 클릭을 막는 경우 방지) */}
       <button
-        onClick={() => setOpen(!open)}
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
         style={{
-          display: 'none',
-          position: 'fixed', top: 12, left: 12, zIndex: 100,
-          background: 'var(--bg2)', border: '1px solid var(--border)',
-          borderRadius: 6, padding: '6px 10px',
-          color: 'var(--text)', cursor: 'pointer', fontSize: 16,
+          position: 'fixed',
+          top: 12,
+          left: 12,
+          zIndex: 200,
+          background: 'var(--bg2)',
+          border: '1px solid var(--border)',
+          borderRadius: 8,
+          padding: 0,
+          width: 44,
+          height: 44,
+          color: 'var(--text)',
+          cursor: 'pointer',
+          fontSize: 20,
+          lineHeight: 1,
+          pointerEvents: 'auto',
+          touchAction: 'manipulation',
+          WebkitTapHighlightColor: 'transparent',
         }}
         className="mobile-menu-btn"
         aria-label="메뉴"
+        aria-expanded={open}
       >
         {open ? '✕' : '☰'}
       </button>
@@ -116,11 +134,14 @@ export default function Sidebar() {
       {/* 모바일 오버레이 */}
       {open && (
         <div
+          role="presentation"
           onClick={() => setOpen(false)}
           style={{
-            display: 'none',
-            position: 'fixed', inset: 0, zIndex: 90,
+            position: 'fixed',
+            inset: 0,
+            zIndex: 190,
             background: 'rgba(0,0,0,0.5)',
+            pointerEvents: 'auto',
           }}
           className="mobile-overlay"
         />
@@ -245,16 +266,24 @@ export default function Sidebar() {
       </aside>
 
       <style>{`
+        /* 기본: 데스크톱에서는 햄버거·오버레이 숨김 */
+        .mobile-menu-btn { display: none !important; }
+        .mobile-overlay  { display: none !important; }
         @media (max-width: 768px) {
-          .mobile-menu-btn { display: block !important; }
+          .mobile-menu-btn {
+            display: flex !important;
+            align-items: center;
+            justify-content: center;
+          }
           .mobile-overlay  { display: block !important; }
           .sidebar {
             position: fixed !important;
             left: -220px !important;
             top: 0 !important;
-            z-index: 95 !important;
+            z-index: 195 !important;
             transition: left 0.25s ease !important;
             min-height: 100dvh !important;
+            pointer-events: auto !important;
           }
           .sidebar.sidebar-open {
             left: 0 !important;
