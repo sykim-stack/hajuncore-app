@@ -49,7 +49,7 @@ export async function handleUploadSource(
   if (!room_id && yard_key && room_key) {
     const resolved = await getRoomByKeys(yard_key, room_key);
     if ('_error' in resolved) {
-      return jsonError(resolved._error, traceId, 404);
+      return jsonError(resolved._error ?? '마당 또는 방을 찾을 수 없습니다', traceId, 404);
     }
     room_id = resolved.room.id as string;
   }
