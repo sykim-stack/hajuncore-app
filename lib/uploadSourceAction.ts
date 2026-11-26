@@ -68,7 +68,7 @@ export async function handleUploadSource(
 
   // Reuse CoreHub's existing principal → owner_key mapping.
   // Never accept owner_key from the request body.
-  let ownerKeys: string[] = [];
+  let hasActiveOwnerLink = false;
   try {
     const { data, error } = await authClient
       .schema('corehub')
@@ -81,17 +81,15 @@ export async function handleUploadSource(
       return jsonError('principal_mapping_unavailable', traceId, 503);
     }
 
-    ownerKeys = [...new Set(
-      (data || [])
-        .map((row: { owner_key?: unknown }) => row.owner_key)
-        .filter((key: unknown): key is string => typeof key === 'string' && key.trim().length > 0)
-        .map((key: string) => key.trim()),
-    )];
+    hasActiveOwnerLink = (data || []).some(
+      (row: { owner_key?: unknown }) =>
+        typeof row.owner_key === 'string' && row.owner_key.trim().length > 0,
+    );
   } catch {
     return jsonError('principal_mapping_unavailable', traceId, 503);
   }
 
-  if (ownerKeys.length === 0) {
+  if (!hasActiveOwnerLink) {
     return jsonError('owner_not_linked', traceId, 403);
   }
 
@@ -155,8 +153,6 @@ export async function handleUploadSource(
     hermes_auto: false,
   };
   if (safeTitle) metadata.title = safeTitle;
-  // Record a trusted owner key only when the principal has exactly one active link.
-  if (ownerKeys.length === 1) metadata.owner_key = ownerKeys[0];
 
   const saved = await insertHajunMessage({
     room_id,
