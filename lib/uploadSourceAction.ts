@@ -1,7 +1,14 @@
 // lib/uploadSourceAction.ts
 // P1 Source upload — CONTRACT 2026-11-26
 import { createHash } from 'crypto';
-import { getRoomByKeys, insertHajunMessage, supabaseGet } from '@/lib/hajunApiCore';
+import { createClient } from '@supabase/supabase-js';
+import {
+  getRoomByKeys,
+  insertHajunMessage,
+  supabaseGet,
+  SUPABASE_URL,
+  SUPABASE_KEY,
+} from '@/lib/hajunApiCore';
 
 export type UploadSourceBody = {
   content?: string;
@@ -11,13 +18,70 @@ export type UploadSourceBody = {
   room_key?: string;
   author_name?: string;
   content_type?: string;
-  owner_key?: string;
 };
+
+function jsonError(error: string, traceId: string, status = 400) {
+  return Response.json(
+    { _error: error, traceId },
+    { status, headers: { 'Cache-Control': 'no-store' } },
+  );
+}
 
 export async function handleUploadSource(
   body: UploadSourceBody,
   traceId: string,
+  accessToken: string,
 ): Promise<Response> {
+  // Validate the existing Supabase Auth session with Auth server.
+  // Create a request-scoped client so no user's auth state is shared between requests.
+  const authClient = createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+      detectSessionInUrl: false,
+    },
+  });
+
+  let authUserId = '';
+  try {
+    const { data, error } = await authClient.auth.getUser(accessToken);
+    if (error || !data.user?.id) {
+      return jsonError('invalid_or_expired_session', traceId, 401);
+    }
+    authUserId = data.user.id;
+  } catch {
+    return jsonError('auth_verification_unavailable', traceId, 503);
+  }
+
+  // Reuse CoreHub's existing principal → owner_key mapping.
+  // Never accept owner_key from the request body.
+  let ownerKeys: string[] = [];
+  try {
+    const { data, error } = await authClient
+      .schema('corehub')
+      .from('auth_owner_links')
+      .select('owner_key')
+      .eq('auth_user_id', authUserId)
+      .is('revoked_at', null);
+
+    if (error) {
+      return jsonError('principal_mapping_unavailable', traceId, 503);
+    }
+
+    ownerKeys = [...new Set(
+      (data || [])
+        .map((row: { owner_key?: unknown }) => row.owner_key)
+        .filter((key: unknown): key is string => typeof key === 'string' && key.trim().length > 0)
+        .map((key: string) => key.trim()),
+    )];
+  } catch {
+    return jsonError('principal_mapping_unavailable', traceId, 503);
+  }
+
+  if (ownerKeys.length === 0) {
+    return jsonError('owner_not_linked', traceId, 403);
+  }
+
   const {
     content,
     title,
@@ -26,37 +90,37 @@ export async function handleUploadSource(
     room_key,
     author_name,
     content_type,
-    owner_key,
-  } = body;
+  } = body || {};
 
   let room_id = typeof bodyRoomId === 'string' ? bodyRoomId.trim() : '';
   if (!room_id && yard_key && room_key) {
     const resolved = await getRoomByKeys(yard_key, room_key);
     if ('_error' in resolved) {
-      return Response.json({ _error: resolved._error, traceId }, { status: 200 });
+      return jsonError(resolved._error, traceId, 404);
     }
     room_id = resolved.room.id as string;
   }
   if (!room_id) {
-    return Response.json(
-      { _error: 'room_id 또는 yard_key+room_key가 필요합니다 (호출자가 방 지정)', traceId },
-      { status: 200 },
-    );
+    return jsonError('room_id 또는 yard_key+room_key가 필요합니다 (호출자가 방 지정)', traceId);
   }
 
   const bodyText = typeof content === 'string' ? content.trim() : '';
   if (!bodyText) {
-    return Response.json({ _error: 'content가 비어 있습니다 (P1 text Source만)', traceId }, { status: 200 });
+    return jsonError('content가 비어 있습니다 (P1 text Source만)', traceId);
   }
   if (bodyText.includes('\0')) {
-    return Response.json({ _error: 'binary content는 P1 범위 밖입니다', traceId }, { status: 200 });
+    return jsonError('binary content는 P1 범위 밖입니다', traceId);
   }
 
+  // Current HajunCore schema has no owner column on hajun_yards/hajun_rooms.
+  // Therefore the existing linked-owner scope is the workspace-level write boundary:
+  // only a signed-in principal with an active CoreHub owner link may write to an
+  // existing HajunCore room. No per-room ownership relation is fabricated here.
   const rooms = await supabaseGet(
     `hajun_rooms?id=eq.${encodeURIComponent(room_id)}&select=id,yard_id,key,name&limit=1`,
   );
   if (!Array.isArray(rooms) || rooms.length === 0) {
-    return Response.json({ _error: '방을 찾을 수 없거나 접근할 수 없습니다', traceId }, { status: 200 });
+    return jsonError('방을 찾을 수 없거나 접근할 수 없습니다', traceId, 404);
   }
 
   const content_hash = createHash('sha256').update(bodyText, 'utf8').digest('hex');
@@ -69,13 +133,6 @@ export async function handleUploadSource(
     typeof author_name === 'string' && author_name.trim()
       ? author_name.trim().slice(0, 80)
       : 'human';
-  const safeOwner =
-    typeof owner_key === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      owner_key.trim(),
-    )
-      ? owner_key.trim()
-      : undefined;
 
   const metadata: Record<string, unknown> = {
     entity_type: 'work_document',
@@ -85,7 +142,8 @@ export async function handleUploadSource(
     hermes_auto: false,
   };
   if (safeTitle) metadata.title = safeTitle;
-  if (safeOwner) metadata.owner_key = safeOwner;
+  // Record a trusted owner key only when the principal has exactly one active link.
+  if (ownerKeys.length === 1) metadata.owner_key = ownerKeys[0];
 
   const saved = await insertHajunMessage({
     room_id,
@@ -97,12 +155,12 @@ export async function handleUploadSource(
     metadata,
   });
   if (saved._error) {
-    return Response.json({ _error: saved._error, traceId }, { status: 200 });
+    return jsonError(saved._error, traceId, 500);
   }
   const row = (saved.data?.[0] || null) as Record<string, unknown> | null;
   const source_id = row && typeof row.id === 'string' ? row.id : null;
   if (!source_id) {
-    return Response.json({ _error: 'Source 저장 후 id를 받지 못했습니다', traceId }, { status: 200 });
+    return jsonError('Source 저장 후 id를 받지 못했습니다', traceId, 500);
   }
 
   return Response.json(
@@ -116,6 +174,6 @@ export async function handleUploadSource(
       },
       traceId,
     },
-    { status: 200 },
+    { status: 201, headers: { 'Cache-Control': 'no-store' } },
   );
 }
