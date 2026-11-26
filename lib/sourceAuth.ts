@@ -38,20 +38,37 @@ export async function resolveSourcePrincipal(accessToken: string): Promise<Sourc
   }
 
   try {
-    const { data, error } = await supabase
-      .schema('corehub')
-      .from('auth_owner_links')
-      .select('owner_key')
-      .eq('auth_user_id', authUserId)
-      .is('revoked_at', null);
+    // Use PostgREST's profile header for the non-public CoreHub schema.
+    // The generated Supabase client has no Database schema typing here,
+    // so .schema('corehub') is rejected by TypeScript as never.
+    const query = new URLSearchParams({
+      select: 'owner_key',
+      auth_user_id: `eq.${authUserId}`,
+      revoked_at: 'is.null',
+    });
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/auth_owner_links?${query.toString()}`, {
+      method: 'GET',
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        Accept: 'application/json',
+        'Accept-Profile': 'corehub',
+      },
+      cache: 'no-store',
+    });
 
-    if (error) {
+    if (!response.ok) {
       return { ok: false, error: 'principal_mapping_unavailable', status: 503 };
     }
 
-    const hasActiveOwnerLink = (data || []).some(
+    const rows: unknown = await response.json();
+    if (!Array.isArray(rows)) {
+      return { ok: false, error: 'principal_mapping_unavailable', status: 503 };
+    }
+
+    const hasActiveOwnerLink = rows.some(
       (row: { owner_key?: unknown }) =>
-        typeof row.owner_key === 'string' && row.owner_key.trim().length > 0,
+        typeof row?.owner_key === 'string' && row.owner_key.trim().length > 0,
     );
     if (!hasActiveOwnerLink) {
       return { ok: false, error: 'owner_not_linked', status: 403 };
