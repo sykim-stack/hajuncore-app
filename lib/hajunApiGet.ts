@@ -148,7 +148,12 @@ export async function GET(req: Request) {
       const room = await supabaseGet(`hajun_rooms?id=eq.${roomId}&limit=1`);
       if (!room?.length) return Response.json({ _error: `방을 찾을 수 없습니다: ${roomId}` }, { status: 200 });
       const messages = await supabaseGet(`hajun_messages?room_id=eq.${roomId}&order=created_at.asc`);
-      const enrichedMessages = await attachCoreNullMedia(Array.isArray(messages) ? messages : []);
+      // Source documents are served only by the authenticated /api/source/list View.
+      // Keep legacy room responses unchanged for every other message type.
+      const legacyMessages = Array.isArray(messages)
+        ? messages.filter((message: Record<string, unknown>) => message.msg_type !== 'doc_injection')
+        : [];
+      const enrichedMessages = await attachCoreNullMedia(legacyMessages);
       return Response.json({ payload: { room: room[0], messages: enrichedMessages }, traceId: createTraceId() });
     }
 
@@ -160,7 +165,10 @@ export async function GET(req: Request) {
       const rooms = await getRoomsByYardId(yard.id);
       const limit = action === 'view_livingroom' ? Number(searchParams.get('limit') || '5') : 1;
       const withMessages = await Promise.all((rooms || []).map(async (room: { id: string }) => {
-        const messages = await supabaseGet(`hajun_messages?room_id=eq.${room.id}&order=created_at.desc&limit=${limit}`);
+        // Keep private Source documents out of legacy unauthenticated yard Views.
+        const messages = await supabaseGet(
+          `hajun_messages?room_id=eq.${room.id}&msg_type=neq.doc_injection&order=created_at.desc&limit=${limit}`
+        );
         return action === 'view_yard'
           ? { ...room, latest: messages?.[0] || null }
           : { ...room, messages };
