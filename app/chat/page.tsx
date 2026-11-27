@@ -414,9 +414,11 @@ export default function ChatPage() {
         return;
       }
       const p = json.payload || {};
-      if (p.session_id) {
-        setExecSessionId(String(p.session_id));
-        localStorage.setItem(EXEC_SESSION_KEY, String(p.session_id));
+      // 이어가기에는 소켓 종료 후에도 유효한 저장 세션 ID만 사용한다.
+      const handle = p.stored_session_id;
+      if (typeof handle === 'string' && handle.trim()) {
+        setExecSessionId(handle);
+        localStorage.setItem(EXEC_SESSION_KEY, handle);
       }
       setMessages(prev => [...prev, {
         role: 'assistant',
