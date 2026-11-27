@@ -111,11 +111,13 @@ export function buildContextViewAnalysisPrompt(input: {
     '프로젝트·철학·사용자 상태를 새로 확정하지 않는다. 제안만 한다.',
     '원본 메시지, DB, 방, 마당, 연결 관계를 직접 쓰거나 변경하지 않는다.',
     '응답은 설명문 없이 유효한 JSON 객체 하나로 반환한다.',
+    'assignments[].view 값은 gwanje, gaebal, brainpool 중 정확히 하나만 사용한다.',
+    'assignments[].confidence 값은 high, medium, low 중 정확히 하나만 사용한다.',
     'JSON 스키마:',
     JSON.stringify({
       source_message_id: input.sourceMessageId,
       assignments: [
-        { view: 'gwanje | gaebal | brainpool', reason: '분류 이유', evidence: ['원문 근거'], confidence: 'high | medium | low' },
+        { view: 'gwanje', reason: '분류 이유', evidence: ['원문 근거'], confidence: 'medium' },
       ],
       unclassified_reason: '분류하지 않았다면 이유, 아니면 빈 문자열',
       related_project_refs: ['CoreNull | CoreChat | CoreRing | CoreHub | HajunAI'],
