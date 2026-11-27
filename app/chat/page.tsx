@@ -521,7 +521,7 @@ export default function ChatPage() {
         setViewAnalysisStatus('');
         if (savedSourceId) {
           // 저장은 한 번만 수행한다. Hermes는 저장된 원본을 읽고 제안만 반환한다.
-          await analyzeSavedSource(savedSourceId);
+          void analyzeSavedSource(savedSourceId);
         } else {
           setViewAnalysisStatus('원본 저장 응답에서 메시지 ID를 확인하지 못했습니다. 중복 저장하지 말고 저장 상태를 확인하세요.');
         }
