@@ -1,7 +1,7 @@
 // lib/synthesizeUnderstanding.ts
 // 계약: 원본=Message/Knowledge Unit, contexts=HajunAI 현재 이해 상태
 // 본선: 관제·개발·브라이언풀 마당 메시지 + KU를 읽어 한 이해로 종합
-import { supabaseGet, supabasePatch } from '@/lib/supabase';
+import { supabaseGet } from '@/lib/supabase';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY!;
@@ -29,7 +29,13 @@ export async function fetchUnderstanding(): Promise<string> {
   }
 }
 
-async function upsertUnderstanding(payload: {
+/**
+ * 이해 이력 보존(정본 §5·§6-3): contexts를 upsert(최신 1행 덮어쓰기)하지 않고
+ * 매 종합마다 새 행을 append 한다. fetchUnderstanding 은 updated_at desc 최신 1행을
+ * 읽으므로 "현재 이해"는 그대로 최신이 되고, 과거 이해는 히스토리로 남아
+ * 과거↔현재 차이 추적과 오류 시 원본 검증이 가능해진다.
+ */
+async function appendUnderstanding(payload: {
   understanding: string;
   knowledge_unit_ids: string[];
 }): Promise<{ id?: string; _error?: string }> {
@@ -41,11 +47,6 @@ async function upsertUnderstanding(payload: {
     updated_at: now,
   };
   try {
-    const existing = await supabaseGet('contexts?order=updated_at.desc&limit=1&select=id');
-    if (existing && existing[0]?.id) {
-      const patched = await supabasePatch('contexts', existing[0].id, body);
-      return { id: patched?.[0]?.id || existing[0].id };
-    }
     const res = await fetch(`${SUPABASE_URL}/rest/v1/contexts`, {
       method: 'POST',
       headers: {
@@ -198,7 +199,7 @@ export async function synthesizeUnderstandingFromKnowledge(): Promise<{
     const fallback =
       `최근 원본을 반영한 현재 이해 (KU ${pickedKU.length} · 마당메시지 ${pickedYard.length}).\n` +
       sourceBlock.slice(0, 1400);
-    const up = await upsertUnderstanding({ understanding: fallback, knowledge_unit_ids: kuIds });
+    const up = await appendUnderstanding({ understanding: fallback, knowledge_unit_ids: kuIds });
     if (up._error) return { _error: up._error };
     return {
       understanding: fallback,
@@ -233,7 +234,7 @@ export async function synthesizeUnderstandingFromKnowledge(): Promise<{
     .trim();
   if (!understanding) return { _error: '이해 문장 생성 실패(빈 응답)' };
 
-  const up = await upsertUnderstanding({ understanding, knowledge_unit_ids: kuIds });
+  const up = await appendUnderstanding({ understanding, knowledge_unit_ids: kuIds });
   if (up._error) return { _error: up._error };
   return {
     understanding,

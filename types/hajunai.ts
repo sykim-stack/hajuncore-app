@@ -67,6 +67,11 @@ export const DEV_CONTEXT_SUMMARY_FIELDS: (keyof DevContextSummary)[] = [
   'development_summary', 'conversation_summary', 'decisions', 'risks',
 ];
 
+// ── source_ai 통제 어휘 (정본 §3: 보카·글록은 프로젝트가 아니라 AI 출처) ──
+// 자유 문자열도 허용(기존 데이터 호환) — UI·집계에서 라벨을 통일하기 위한 soft hint.
+export const SOURCE_AI_VOCAB = ['HajunAI', 'CoreNull', '메스', '보카', '글록'] as const;
+export type SourceAiLabel = (typeof SOURCE_AI_VOCAB)[number] | (string & {});
+
 // ── Knowledge Unit 타입 (hajunai_conversations) ───────────────
 // ADR-K04 메타데이터 포함 (v1.1)
 export type KnowledgeUnit = {
@@ -74,8 +79,8 @@ export type KnowledgeUnit = {
   project_id?:      string;
 
   // 분류
-  source_ai?:       string;
-  source_core?:     'CoreRing' | 'CoreChat' | 'CoreNull' | 'HajunAI' | 'external' | null;
+  source_ai?:       SourceAiLabel;
+  source_core?:     'CoreRing' | 'CoreChat' | 'CoreNull' | 'CoreHub' | 'HajunAI' | 'external' | null;
   knowledge_type?:  'language' | 'context' | 'life' | 'pattern' | 'raw' | null;
   person_id?:       string | null;
 
