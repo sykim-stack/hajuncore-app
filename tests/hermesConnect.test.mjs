@@ -1,7 +1,7 @@
 /**
  * Hermes 연결 회귀 테스트 (MVP-0)
  *
- * 실제로 돌고 있는 \`hermes serve\` (127.0.0.1:9119) 에 붙어
+ * 실제로 돌고 있는 `hermes serve\` (127.0.0.1:9119) 에 붙어
  *  1) health
  *  2) 새 세션 생성 + 작업 지시 + 최종 답변 수신
  *  3) stored_session_id 로 resume 한 뒤 대화 연속성
