@@ -134,3 +134,42 @@ export function buildContextViewAnalysisPrompt(input: {
     input.sourceContent,
   ].join('\n\n');
 }
+
+/** Live yard room keys (read-only inventory, 2026-11-28). Do not create rooms from code. */
+export const KNOWN_YARD_ROOMS: Record<ContextViewKey, readonly string[]> = {
+  gwanje: ['lang_meaning', 'dialogue_context', 'neighbor_link', 'life_space', 'state_memory'],
+  gaebal: ['corenull', 'corechat', 'corering', 'corehub', 'hajun'],
+  brainpool: ['brainpool'],
+};
+
+const PROJECT_TO_GAEBAL_ROOM: Record<string, string> = {
+  CoreNull: 'corenull',
+  CoreChat: 'corechat',
+  CoreRing: 'corering',
+  CoreHub: 'corehub',
+  HajunAI: 'hajun',
+};
+
+/**
+ * Suggest a room key for a view. Returns null when the human must choose.
+ * Never invents rooms; only returns keys from KNOWN_YARD_ROOMS.
+ */
+export function suggestRoomKeyForView(
+  view: ContextViewKey,
+  relatedProjectRefs: string[] = []
+): string | null {
+  const rooms = KNOWN_YARD_ROOMS[view];
+  if (!rooms || rooms.length === 0) return null;
+  if (rooms.length === 1) return rooms[0];
+  if (view === 'gaebal') {
+    for (const ref of relatedProjectRefs) {
+      const key = PROJECT_TO_GAEBAL_ROOM[ref];
+      if (key && rooms.includes(key)) return key;
+    }
+  }
+  return null;
+}
+
+export function isKnownRoomKey(view: ContextViewKey, roomKey: string): boolean {
+  return (KNOWN_YARD_ROOMS[view] || []).includes(roomKey);
+}
