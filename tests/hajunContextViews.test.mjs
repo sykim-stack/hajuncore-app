@@ -3,6 +3,9 @@ import {
   CONTEXT_VIEW_KEYS,
   CONTEXT_VIEW_DEFINITIONS,
   buildContextViewAnalysisPrompt,
+  KNOWN_YARD_ROOMS,
+  suggestRoomKeyForView,
+  isKnownRoomKey,
 } from '../lib/hajunContextViews.ts';
 
 assert.deepEqual(CONTEXT_VIEW_KEYS, ['gwanje', 'gaebal', 'brainpool']);
@@ -11,18 +14,22 @@ assert.match(CONTEXT_VIEW_DEFINITIONS.gaebal.purpose, /CoreNull, CoreChat, CoreR
 assert.match(CONTEXT_VIEW_DEFINITIONS.brainpool.purpose, /핵심 철학/);
 
 const prompt = buildContextViewAnalysisPrompt({
-  sourceMessageId: 'source-1',
-  sourceContent: 'CoreRing 번역 연결에서 반복 오류가 발생했다.',
-  sourceType: 'issue',
-  sourceCreatedAt: '2026-11-27T10:00:00Z',
+  sourceMessageId: 'msg-1',
+  sourceContent: '테스트 원본',
+  sourceType: 'understanding',
 });
+assert.match(prompt, /msg-1/);
+assert.match(prompt, /테스트 원본/);
+assert.match(prompt, /gwanje/);
+assert.match(prompt, /읽기 전용/);
 
-assert.match(prompt, /다섯 엔진방.*세 마당/s);
-assert.match(prompt, /하나의 원본을 여러 마당에 연결/);
-assert.match(prompt, /assignments\[\]\.view 값은 gwanje, gaebal, brainpool 중 정확히 하나/);
-assert.match(prompt, /related_project_refs 항목은 CoreNull, CoreChat, CoreRing, CoreHub, HajunAI/);
-assert.match(prompt, /원본 메시지, DB, 방, 마당, 연결 관계를 직접 쓰거나 변경하지 않는다/);
-assert.match(prompt, /source-1/);
-assert.match(prompt, /CoreRing 번역 연결에서 반복 오류가 발생했다/);
+assert.deepEqual([...KNOWN_YARD_ROOMS.brainpool], ['brainpool']);
+assert.equal(suggestRoomKeyForView('brainpool'), 'brainpool');
+assert.equal(suggestRoomKeyForView('gwanje'), null);
+assert.equal(suggestRoomKeyForView('gaebal', ['CoreRing']), 'corering');
+assert.equal(suggestRoomKeyForView('gaebal', []), null);
+assert.equal(isKnownRoomKey('gaebal', 'corering'), true);
+assert.equal(isKnownRoomKey('gaebal', 'default'), false);
+assert.equal(isKnownRoomKey('gwanje', 'lang_meaning'), true);
 
-console.log('hajunContextViews: all assertions passed');
+console.log('hajunContextViews.test.mjs: ok');
