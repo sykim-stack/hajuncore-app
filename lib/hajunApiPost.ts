@@ -24,6 +24,8 @@ import {
 } from '@/lib/hajunApiCore';
 import { evaluateHermesRule } from '@/lib/hermesRule';
 import { buildChatSystemPrompt } from '@/lib/buildChatSystemPrompt';
+import { buildContextViewAnalysisPrompt, CONTEXT_VIEW_KEYS, type ContextViewAnalysis } from '@/lib/hajunContextViews';
+import { hermesRun } from '@/lib/hermesClient';
 
 async function callGroqWithFallback(
   prompt: string,
@@ -187,6 +189,86 @@ export async function POST(req: Request) {
   try {
     const rawBody = await req.text();
     const body = JSON.parse(rawBody.replace(/^\uFEFF/, ''));
+
+    if (action === 'analyze_context_views') {
+      const sourceMessageId =
+        typeof body.source_message_id === 'string' ? body.source_message_id.trim() : '';
+      if (!sourceMessageId) {
+        return Response.json({ _error: 'source_message_id가 필요합니다', traceId }, { status: 200 });
+      }
+
+      // 분석 대상은 이미 저장된 원본 메시지 한 건으로 한정한다.
+      const sourceRows = await supabaseGet(
+        `hajun_messages?id=eq.${encodeURIComponent(sourceMessageId)}&select=id,content,msg_type,created_at&limit=1`
+      );
+      const source = Array.isArray(sourceRows) ? sourceRows[0] : null;
+      if (!source || typeof source.content !== 'string') {
+        return Response.json({ _error: '분석할 원본 메시지를 찾을 수 없습니다', traceId }, { status: 200 });
+      }
+
+      const prompt = buildContextViewAnalysisPrompt({
+        sourceMessageId: String(source.id),
+        sourceContent: source.content,
+        sourceType: typeof source.msg_type === 'string' ? source.msg_type : undefined,
+        sourceCreatedAt: typeof source.created_at === 'string' ? source.created_at : undefined,
+      });
+      const run = await hermesRun({
+        prompt,
+        source: 'hajun-context-view-analysis',
+        timeout_ms: 600_000,
+      });
+      if (run._error || !run.text) {
+        return Response.json({ _error: run._error || 'Hermes 분석 결과가 비어 있습니다', traceId }, { status: 200 });
+      }
+
+      // Hermes 응답은 JSON만 허용한다. 저장이나 연결 작업은 이 경로에서 수행하지 않는다.
+      const jsonText = run.text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(jsonText);
+      } catch {
+        return Response.json({
+          _error: 'Hermes가 유효한 JSON 분석 결과를 반환하지 않았습니다',
+          traceId,
+          analysis_text: run.text.slice(0, 4000),
+        }, { status: 200 });
+      }
+
+      const candidate = parsed as Partial<ContextViewAnalysis>;
+      if (
+        candidate.source_message_id !== sourceMessageId ||
+        !Array.isArray(candidate.assignments) ||
+        !Array.isArray(candidate.related_project_refs) ||
+        !Array.isArray(candidate.open_questions)
+      ) {
+        return Response.json({ _error: '분석 결과의 필수 구조가 올바르지 않습니다', traceId }, { status: 200 });
+      }
+
+      const assignments = candidate.assignments.filter((item) =>
+        !!item &&
+        typeof item === 'object' &&
+        CONTEXT_VIEW_KEYS.includes(item.view) &&
+        typeof item.reason === 'string' &&
+        Array.isArray(item.evidence) &&
+        item.evidence.every((entry) => typeof entry === 'string') &&
+        ['high', 'medium', 'low'].includes(item.confidence)
+      );
+      if (assignments.length !== candidate.assignments.length) {
+        return Response.json({ _error: '분석 결과에 허용되지 않은 View 또는 필드가 있습니다', traceId }, { status: 200 });
+      }
+
+      const analysis: ContextViewAnalysis = {
+        source_message_id: sourceMessageId,
+        assignments,
+        unclassified_reason: typeof candidate.unclassified_reason === 'string' ? candidate.unclassified_reason : '',
+        related_project_refs: candidate.related_project_refs.filter((item): item is string => typeof item === 'string'),
+        open_questions: candidate.open_questions.filter((item): item is string => typeof item === 'string'),
+      };
+      return Response.json({
+        payload: { analysis, hermes_session_id: run.session_id, duration_ms: run.duration_ms },
+        traceId,
+      }, { status: 200 });
+    }
 
     if (action === 'post_message') {
       let { room_id, author_type, author_name, msg_type, content, ref_ids = [], metadata, yard_key, room_key } = body as {

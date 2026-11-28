@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import Sidebar from '@/components/Sidebar';
 import { MSG_TYPE_LABEL } from '@/types/hajun';
+import { CONTEXT_VIEW_DEFINITIONS, type ContextViewAnalysis, type ContextViewKey } from '@/lib/hajunContextViews';
 
 type HermesInfo = {
   hasActionUnit: boolean;
@@ -178,6 +179,10 @@ export default function ChatPage() {
   const [yardContent, setYardContent] = useState('');
   const [yardSaving, setYardSaving] = useState(false);
   const [yardStatus, setYardStatus] = useState('');
+  const [lastSavedSourceId, setLastSavedSourceId] = useState('');
+  const [viewAnalysis, setViewAnalysis] = useState<ContextViewAnalysis | null>(null);
+  const [viewAnalysisStatus, setViewAnalysisStatus] = useState('');
+  const [viewAnalysisLoading, setViewAnalysisLoading] = useState(false);
   const [synthAfter, setSynthAfter] = useState(true);
   const [roomMessages, setRoomMessages] = useState<RoomMessage[]>([]);
   const [roomMessagesLoading, setRoomMessagesLoading] = useState(false);
@@ -409,9 +414,11 @@ export default function ChatPage() {
         return;
       }
       const p = json.payload || {};
-      if (p.session_id) {
-        setExecSessionId(String(p.session_id));
-        localStorage.setItem(EXEC_SESSION_KEY, String(p.session_id));
+      // 이어가기에는 소켓 종료 후에도 유효한 저장 세션 ID만 사용한다.
+      const handle = p.stored_session_id;
+      if (typeof handle === 'string' && handle.trim()) {
+        setExecSessionId(handle);
+        localStorage.setItem(EXEC_SESSION_KEY, handle);
       }
       setMessages(prev => [...prev, {
         role: 'assistant',
@@ -452,6 +459,32 @@ export default function ChatPage() {
     );
   };
 
+  const analyzeSavedSource = async (sourceMessageId: string) => {
+    if (!sourceMessageId || viewAnalysisLoading) return;
+    setViewAnalysisLoading(true);
+    setViewAnalysis(null);
+    setViewAnalysisStatus('Hermes가 저장된 원본을 읽고 세 마당 View를 분석하고 있습니다.');
+    try {
+      const res = await fetch('/api/hajun?action=analyze_context_views', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_message_id: sourceMessageId }),
+      });
+      const json = await res.json();
+      if (!res.ok || json?._error) throw new Error(json?._error || `HTTP ${res.status}`);
+      const analysis = json?.payload?.analysis as ContextViewAnalysis | undefined;
+      if (!analysis || analysis.source_message_id !== sourceMessageId || !Array.isArray(analysis.assignments)) {
+        throw new Error('Hermes 분석 결과의 형식이 올바르지 않습니다. 원본은 이미 저장되어 있습니다.');
+      }
+      setViewAnalysis(analysis);
+      setViewAnalysisStatus('분석 제안 도착 · 아직 원본이나 DB 연결을 변경하지 않았습니다.');
+    } catch (e) {
+      setViewAnalysisStatus(`원본은 저장됨 · View 분석 실패: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setViewAnalysisLoading(false);
+    }
+  };
+
   const saveToYard = async () => {
     const content = yardContent.trim();
     if (!content || !yardKey || !roomKey || yardSaving) return;
@@ -484,6 +517,16 @@ export default function ChatPage() {
             ? `✅ ${yardKey}/${roomKey}에 원본 저장 · 참조 ${selectedRefIds.length}건 확인`
             : `⚠ 원본은 저장됐지만 선택한 참조를 응답에서 확인하지 못했습니다. 중복 저장하지 말고 확인해 주세요.`;
         setYardStatus(saveStatus);
+        const savedSourceId = typeof json.payload?.id === 'string' ? json.payload.id : '';
+        setLastSavedSourceId(savedSourceId);
+        setViewAnalysis(null);
+        setViewAnalysisStatus('');
+        if (savedSourceId) {
+          // 저장은 한 번만 수행한다. Hermes는 저장된 원본을 읽고 제안만 반환한다.
+          void analyzeSavedSource(savedSourceId);
+        } else {
+          setViewAnalysisStatus('원본 저장 응답에서 메시지 ID를 확인하지 못했습니다. 중복 저장하지 말고 저장 상태를 확인하세요.');
+        }
         if (synthAfter) {
           try {
             await fetch('/api/hajun?action=synthesize_context', {
@@ -785,6 +828,38 @@ export default function ChatPage() {
         {yardStatus && (
           <div style={{ ...S.statusMsg, color: yardStatus.startsWith('✅') ? 'var(--accent2)' : 'var(--warn)' }}>
             {yardStatus}
+          </div>
+        )}
+        {viewAnalysisStatus && (
+          <div style={{ ...S.statusMsg, color: viewAnalysisStatus.includes('실패') ? 'var(--warn)' : 'var(--text2)' }}>
+            {viewAnalysisStatus}
+          </div>
+        )}
+        {lastSavedSourceId && !viewAnalysisLoading && !viewAnalysis && (
+          <button type="button" style={{ ...S.smallBtn, width: '100%', marginTop: 8 }} onClick={() => analyzeSavedSource(lastSavedSourceId)}>
+            저장 원본 다시 분석
+          </button>
+        )}
+        {viewAnalysisLoading && <div style={{ ...S.statusMsg, color: 'var(--text2)' }}>Hermes 분석 중…</div>}
+        {viewAnalysis && (
+          <div style={{ marginTop: 12, padding: 12, border: '1px solid var(--accent)', borderRadius: 7, background: 'var(--bg3)' }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Hermes · 세 마당 View 제안</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>원본 ID: {viewAnalysis.source_message_id} · 제안 전용</div>
+            {viewAnalysis.assignments.length === 0 ? (
+              <div style={{ fontSize: 13, color: 'var(--text2)' }}>{viewAnalysis.unclassified_reason || '분류 근거가 충분하지 않습니다.'}</div>
+            ) : viewAnalysis.assignments.map((item, index) => (
+              <div key={`${item.view}-${index}`} style={{ borderTop: '1px solid var(--border)', padding: '9px 0' }}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>
+                  {CONTEXT_VIEW_DEFINITIONS[item.view as ContextViewKey]?.label || item.view}
+                  <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · 확신도 {item.confidence}</span>
+                </div>
+                <div style={{ fontSize: 13, lineHeight: 1.55 }}>{item.reason}</div>
+                {item.evidence?.length > 0 && <ul style={{ margin: '5px 0 0', paddingLeft: 18, fontSize: 12, color: 'var(--text2)' }}>{item.evidence.map((evidence, i) => <li key={i}>{evidence}</li>)}</ul>}
+              </div>
+            ))}
+            {viewAnalysis.related_project_refs.length > 0 && <div style={{ fontSize: 12, marginTop: 6 }}>관련 프로젝트 후보: {viewAnalysis.related_project_refs.join(' · ')}</div>}
+            {viewAnalysis.open_questions.length > 0 && <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 6 }}>확인 질문: {viewAnalysis.open_questions.join(' / ')}</div>}
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 8 }}>사람 승인 전에는 View 연결을 저장하지 않습니다.</div>
           </div>
         )}
       </div>

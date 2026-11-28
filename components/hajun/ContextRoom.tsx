@@ -6,6 +6,8 @@ import {
   HajunRoom, HajunMessage,
   MSG_TYPE_LABEL, MSG_TYPE_COLOR, MsgType, YARD_LABEL,
 } from '@/types/hajun';
+import type { ContextViewAnalysis, ContextViewKey } from '@/lib/hajunContextViews';
+import { CONTEXT_VIEW_DEFINITIONS } from '@/lib/hajunContextViews';
 
 const S: Record<string, React.CSSProperties> = {
   page: { display: 'flex', minHeight: '100vh', background: 'var(--bg)' },
@@ -49,6 +51,9 @@ export default function ContextRoom({ yardKey, roomKey }: { yardKey: string; roo
   const [authorName, setAuthorName] = useState('여리');
   const [msgType, setMsgType] = useState<MsgType>('understanding');
   const [refIds, setRefIds] = useState<string[]>([]);
+  const [lastSavedSourceId, setLastSavedSourceId] = useState('');
+  const [viewAnalysis, setViewAnalysis] = useState<ContextViewAnalysis | null>(null);
+  const [analyzingViews, setAnalyzingViews] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
@@ -97,6 +102,8 @@ export default function ContextRoom({ yardKey, roomKey }: { yardKey: string; roo
       if (json._error) setErrMsg(json._error);
       else {
         const savedCount = Array.isArray(json.payload?.ref_ids) ? json.payload.ref_ids.length : refIds.length;
+        setLastSavedSourceId(typeof json.payload?.id === 'string' ? json.payload.id : '');
+        setViewAnalysis(null);
         setContent(''); clearRefs();
         setOkMsg(savedCount ? `저장됨 · 참조 ${savedCount}건` : '저장됨');
         await load();
@@ -104,6 +111,25 @@ export default function ContextRoom({ yardKey, roomKey }: { yardKey: string; roo
     } catch (e) {
       setErrMsg(e instanceof Error ? e.message : String(e));
     } finally { setPosting(false); }
+  };
+
+  const analyzeSavedSource = async () => {
+    if (!lastSavedSourceId || analyzingViews) return;
+    setAnalyzingViews(true); setErrMsg(''); setOkMsg(''); setViewAnalysis(null);
+    try {
+      const res = await fetch('/api/hajun?action=analyze_context_views', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_message_id: lastSavedSourceId }),
+      });
+      const json = await res.json();
+      if (json._error) setErrMsg(json._error);
+      else {
+        setViewAnalysis(json.payload?.analysis || null);
+        setOkMsg('세 마당 View 분석 제안이 도착했습니다. 아직 저장·연결되지는 않았습니다.');
+      }
+    } catch (e) {
+      setErrMsg(e instanceof Error ? e.message : String(e));
+    } finally { setAnalyzingViews(false); }
   };
 
   const askAiContext = async () => {
@@ -290,7 +316,48 @@ export default function ContextRoom({ yardKey, roomKey }: { yardKey: string; roo
             <button type="button" style={{ ...S.submitBtn, background: '#39C5CF', ...(aiPosting ? S.submitOff : {}) }} disabled={aiPosting || posting} onClick={askAiContext}>
               {aiPosting ? 'HajunAI 응답 중...' : 'AI 답변 요청'}
             </button>
+            <button type="button"
+              style={{ ...S.submitBtn, background: '#8B7CF6', ...(!lastSavedSourceId || analyzingViews ? S.submitOff : {}) }}
+              disabled={!lastSavedSourceId || analyzingViews || posting}
+              onClick={analyzeSavedSource}>
+              {analyzingViews ? 'Hermes 분석 중...' : '저장 원본을 세 마당으로 분석'}
+            </button>
           </div>
+          {viewAnalysis && (
+            <div style={{ marginTop: 14, padding: 14, border: '1px solid var(--accent)', borderRadius: 8, background: 'var(--bg3)' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Hermes · 세 마당 View 분석 제안</div>
+              <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
+                원본 ID: {viewAnalysis.source_message_id} · 제안만 생성됨 · 아직 DB 연결 없음
+              </div>
+              {viewAnalysis.assignments.length === 0 && (
+                <div style={{ fontSize: 12, color: 'var(--text2)' }}>
+                  분류할 View가 없습니다. {viewAnalysis.unclassified_reason || '근거가 충분하지 않습니다.'}
+                </div>
+              )}
+              {viewAnalysis.assignments.map((item, index) => (
+                <div key={item.view + '-' + index} style={{ padding: '10px 0', borderTop: '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 5 }}>
+                    <strong style={{ fontSize: 12 }}>{CONTEXT_VIEW_DEFINITIONS[item.view as ContextViewKey].label}</strong>
+                    <span style={{ fontSize: 10, color: 'var(--text3)' }}>확신도 {item.confidence}</span>
+                  </div>
+                  <div style={{ fontSize: 12, lineHeight: 1.55 }}>{item.reason}</div>
+                  {item.evidence.length > 0 && (
+                    <ul style={{ margin: '6px 0 0', paddingLeft: 18, color: 'var(--text2)', fontSize: 11 }}>
+                      {item.evidence.map((evidence, i) => <li key={i}>{evidence}</li>)}
+                    </ul>
+                  )}
+                </div>
+              ))}
+              {viewAnalysis.related_project_refs.length > 0 && (
+                <div style={{ fontSize: 11, marginTop: 8 }}>관련 프로젝트 후보: {viewAnalysis.related_project_refs.join(' · ')}</div>
+              )}
+              {viewAnalysis.open_questions.length > 0 && (
+                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text2)' }}>
+                  확인 질문: {viewAnalysis.open_questions.join(' / ')}
+                </div>
+              )}
+            </div>
+          )}
           {errMsg && <div style={S.errMsg}>⚠ {errMsg}</div>}
           {okMsg && <div style={S.okMsg}>✅ {okMsg}</div>}
         </div>

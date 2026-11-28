@@ -11,11 +11,12 @@
 //
 // 확인된 흐름 (2026-11 실측):
 //   ws://127.0.0.1:9119/api/ws?token=<세션토큰>  (연결 즉시 gateway.ready)
-//   → session.create {source, profile, cwd} → {session_id, stored_session_id, ...}
-//   → prompt.submit {session_id, text}
+//   → session.create {source, profile, cwd} → {session_id(runtime), stored_session_id, ...}
+//   → session.resume {session_id: stored_session_id} → {session_id(new runtime)}
+//   → prompt.submit {session_id: runtime, text}
 //   → event:message.start → message.delta / thinking.delta → message.complete
 //     (message.complete.payload = { text, usage, status })
-//   같은 session_id 로 다시 prompt.submit 하면 대화가 이어진다.
+//   이어가기는 stored_session_id 로 resume 한 뒤 새 runtime session_id 를 사용한다.
 
 export const HERMES_BASE_URL = process.env.HERMES_BASE_URL || 'http://127.0.0.1:9119';
 
@@ -45,7 +46,7 @@ export interface HermesHealth {
 export interface HermesRunInput {
   /** 하준아이가 넘기는 작업 지시 원문. */
   prompt: string;
-  /** 있으면 그 세션에 이어서 보낸다 (작업 연속성). */
+  /** 이어갈 저장 세션 ID. 전달되면 session.resume 으로 새 런타임 세션을 확보한다. */
   session_id?: string;
   /** 작업 폴더. Hermes 가 이 경로의 AGENTS.md·메모리·스킬을 함께 읽는다. */
   cwd?: string;
@@ -56,7 +57,9 @@ export interface HermesRunInput {
 }
 
 export interface HermesRunResult {
+  /** 현재 연결에서 prompt.submit 에 사용하는 런타임 세션 ID. */
   session_id?: string;
+  /** 브라우저에 보관해 다음 요청의 resume 에 사용하는 영속 세션 ID. */
   stored_session_id?: string;
   /** 최종 답변 텍스트. */
   text?: string;
@@ -118,7 +121,7 @@ export async function hermesHealth(): Promise<HermesHealth> {
 
 /**
  * 작업 지시를 Hermes 에게 넘기고 최종 답변까지 받는다.
- * session_id 를 주면 새 세션을 만들지 않고 그 대화를 이어간다.
+ * 저장 session_id 를 주면 session.resume 으로 새 런타임 ID를 확보해 이어간다.
  */
 export async function hermesRun(input: HermesRunInput): Promise<HermesRunResult> {
   const prompt = (input.prompt || '').trim();
@@ -224,10 +227,15 @@ export async function hermesRun(input: HermesRunInput): Promise<HermesRunResult>
       setTimeout(() => reject(new Error('WebSocket 연결 시간 초과')), OPEN_TIMEOUT_MS);
     });
 
-    // 1) 세션 확보 — session_id 가 오면 새로 만들지 않는다.
-    let sessionId = (input.session_id || '').trim();
-    let storedSessionId: string | undefined;
-    if (!sessionId) {
+    // 1) 세션 확보
+    //    input.session_id 는 저장된(stored) 세션 ID다. 런타임 ID는 소켓 종료 후
+    //    detach될 수 있으므로 이어가기는 session.resume 으로 새 런타임 ID를 받는다.
+    let sessionId = ''; // 현재 연결에서 사용하는 런타임 ID
+    let storedSessionId: string | undefined = (input.session_id || '').trim() || undefined;
+
+    const createSession = async (): Promise<string> => {
+      // 새 세션 생성이 시작되면 이전 저장 ID를 성공한 새 ID로 오인하지 않도록 초기화한다.
+      storedSessionId = undefined;
       const created = await rpc(
         'session.create',
         {
@@ -239,14 +247,46 @@ export async function hermesRun(input: HermesRunInput): Promise<HermesRunResult>
         },
         OPEN_TIMEOUT_MS
       );
-      sessionId = typeof created.session_id === 'string' ? created.session_id : '';
-      storedSessionId =
-        typeof created.stored_session_id === 'string' ? created.stored_session_id : undefined;
-      if (!sessionId) return { _error: 'session.create 가 session_id 를 주지 않았습니다' };
+
+      const nextStoredSessionId =
+        typeof created.stored_session_id === 'string' ? created.stored_session_id.trim() : '';
+      if (!nextStoredSessionId) {
+        throw new Error('session.create 가 stored_session_id 를 주지 않았습니다');
+      }
+      storedSessionId = nextStoredSessionId;
+
+      const runtimeSessionId =
+        typeof created.session_id === 'string' ? created.session_id : '';
+      if (!runtimeSessionId) {
+        throw new Error('session.create 가 session_id 를 주지 않았습니다');
+      }
+      return runtimeSessionId;
+    };
+
+    if (storedSessionId) {
+      try {
+        const resumed = await rpc(
+          'session.resume',
+          { session_id: storedSessionId, profile: '', source: input.source || 'gui' },
+          OPEN_TIMEOUT_MS
+        );
+        sessionId = typeof resumed.session_id === 'string' ? resumed.session_id : '';
+      } catch {
+        sessionId = ''; // resume 실패: 새 저장 세션을 만든다
+      }
+    }
+    if (!sessionId) {
+      sessionId = await createSession();
     }
 
-    // 2) 작업 지시 전달
-    await rpc('prompt.submit', { session_id: sessionId, text: prompt }, OPEN_TIMEOUT_MS);
+    // 2) 작업 지시 전달. detach 된 런타임 ID라면 새 세션으로 한 번만 재시도한다.
+    try {
+      await rpc('prompt.submit', { session_id: sessionId, text: prompt }, OPEN_TIMEOUT_MS);
+    } catch (e) {
+      if (!/session not found|4001/.test(errMsg(e))) throw e;
+      sessionId = await createSession();
+      await rpc('prompt.submit', { session_id: sessionId, text: prompt }, OPEN_TIMEOUT_MS);
+    }
 
     // 3) 최종 답변 대기
     const doneAt = waitEvent('message.complete', sessionId, timeoutMs);
@@ -265,7 +305,6 @@ export async function hermesRun(input: HermesRunInput): Promise<HermesRunResult>
     return result;
   } catch (e) {
     return {
-      session_id: input.session_id || undefined,
       events,
       duration_ms: Date.now() - startedAt,
       _error: errMsg(e),
